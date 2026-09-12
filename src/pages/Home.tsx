@@ -134,7 +134,7 @@ const Home = () => {
       </svg>
 
       {/* Hero Section (Under SVG: z-index 5) */}
-      <section className="section" style={{ position: 'relative', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', overflow: 'hidden', zIndex: 5 }}>
+      <section className="section hero-section" style={{ position: 'relative', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', overflow: 'hidden', zIndex: 5 }}>
         <div style={{
           position: 'absolute',
           top: 0,
@@ -156,7 +156,7 @@ const Home = () => {
           zIndex: -1,
         }} />
 
-        <div className="container text-center hero-content" style={{ zIndex: 1, marginTop: 'clamp(-10vh, -20vw, -40vh)' }}>
+        <div className="container text-center hero-content" style={{ zIndex: 1 }}>
           <div className="glass-panel" style={{ maxWidth: '900px', margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <img
               src="/images/logo_t.png"

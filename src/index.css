@@ -157,6 +157,15 @@ p { margin-bottom: var(--spacing-sm); color: var(--text-secondary); }
 .section { padding: var(--spacing-xl) 0; }
 .text-center { text-align: center; }
 
+.hero-section {
+  min-height: calc(100vh - 6rem) !important;
+  padding: 5rem 0 9rem;
+}
+
+.hero-content {
+  width: 100%;
+}
+
 /* Liquid Glass Panel Utility (Golden Flavour) */
 .glass-panel {
   padding: 3rem; /* Default desktop padding */
@@ -561,6 +570,7 @@ p { margin-bottom: var(--spacing-sm); color: var(--text-secondary); }
   .mac-dock { gap: 0.25rem; padding: 0.5rem; border-radius: 16px; }
   .mac-dock-icon { width: 40px; height: 40px; border-radius: 8px; }
   .glass-panel { padding: 1.5rem !important; }
+  .hero-section { min-height: calc(100vh - 5rem) !important; padding: 4rem 0 8rem; }
   
   .practice-cycle-flow {
     flex-direction: column;

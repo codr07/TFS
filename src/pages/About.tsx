@@ -40,7 +40,7 @@ const About = () => {
           <motion.div key="instructor" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
             <div style={{ display: 'flex', gap: '2.5rem', alignItems: 'flex-start' }}>
               <div className="morphing-pfp" style={{ width: '130px', height: '130px', background: 'linear-gradient(135deg, var(--gold) 0%, #a67c00 100%)', flexShrink: 0, overflow: 'hidden' }}>
-                <img src="/public/images/pfp.png" alt="Sankha Saha" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <img src="/images/pfp.png" alt="Sankha Saha" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               </div>
               <div>
                 <h2 style={{ color: 'var(--gold)', marginBottom: '0.25rem', fontSize: '2.5rem' }}>Sankha Saha</h2>

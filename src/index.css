@@ -1,0 +1,576 @@
+:root {
+  --bg-desktop: #000000;
+  --glass-bg: rgba(30, 30, 30, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-highlight: rgba(255, 255, 255, 0.05);
+  --glass-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  
+  --gold: #d4af37;
+  --gold-hover: #e5c358;
+  
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(235, 235, 245, 0.6);
+  --text-inverse: #0a0a0a;
+  
+  --font-heading: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  
+  --spacing-xs: 0.5rem;
+  --spacing-sm: 1rem;
+  --spacing-md: 2rem;
+  --spacing-lg: 5rem;
+  --spacing-xl: 10rem;
+  
+  --radius-sm: 12px;
+  --radius-md: 24px;
+  --radius-lg: 32px;
+  --radius-pill: 999px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* Lenis */
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+.lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+.lenis.lenis-stopped { overflow: hidden; }
+.lenis.lenis-smooth iframe { pointer-events: none; }
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-desktop);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  line-height: 1.5;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  
+  /* Desktop Layout */
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  background-image: url('/images/Hero.png');
+  background-size: cover;
+  background-position: center;
+}
+
+/* Subtle noise overlay on desktop */
+body::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: url('data:image/svg+xml;utf8,%3Csvg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"%3E%3Cfilter id="noiseFilter"%3E%3CfeTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/%3E%3C/filter%3E%3Crect width="100%25" height="100%25" filter="url(%23noiseFilter)" opacity="0.04"/%3E%3C/svg%3E');
+  z-index: -1;
+  pointer-events: none;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  margin-top: 0;
+  color: var(--text-primary);
+}
+
+h1 { font-size: clamp(2.25rem, 7vw, 7rem); line-height: 1.05; }
+h2 { font-size: clamp(1.75rem, 5vw, 5rem); line-height: 1.1; }
+h3 { font-size: clamp(1.25rem, 2.5vw, 2.5rem); color: var(--gold); }
+
+a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+
+a:hover { color: var(--gold); }
+p { margin-bottom: var(--spacing-sm); color: var(--text-secondary); }
+
+/* Link Hover Effects */
+.hover-underline {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 2px;
+}
+.hover-underline::after {
+  content: '';
+  position: absolute;
+  width: 100%;
+  transform: scaleX(0);
+  height: 2px;
+  bottom: 0;
+  left: 0;
+  background-color: var(--gold);
+  transform-origin: bottom right;
+  transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  box-shadow: 0 0 8px rgba(212, 175, 55, 0.5);
+}
+.hover-underline:hover::after {
+  transform: scaleX(1);
+  transform-origin: bottom left;
+}
+.hover-underline:hover {
+  color: var(--gold) !important;
+}
+
+.hover-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-pill);
+  z-index: 1;
+  transition: color 0.3s ease;
+  margin: -0.5rem -1rem; /* Offset padding to keep layout stable */
+}
+.hover-pill::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(212, 175, 55, 0.1);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  border-radius: var(--radius-pill);
+  z-index: -1;
+  transform: scale(0.8) translateY(2px);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.hover-pill:hover::before {
+  transform: scale(1) translateY(0);
+  opacity: 1;
+}
+.hover-pill:hover {
+  color: var(--gold) !important;
+}
+
+/* Layout Utilities */
+.container {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 var(--spacing-md);
+}
+
+.section { padding: var(--spacing-xl) 0; }
+.text-center { text-align: center; }
+
+/* Liquid Glass Panel Utility (Golden Flavour) */
+.glass-panel {
+  padding: 3rem; /* Default desktop padding */
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.08) 0%, rgba(20, 20, 25, 0.3) 100%);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.5),
+    inset 0 1px 1px rgba(212, 175, 55, 0.4),
+    inset 0 0 20px rgba(212, 175, 55, 0.05);
+  border-radius: var(--radius-md);
+  position: relative;
+  overflow: hidden;
+}
+.glass-panel::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; width: 200%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.15), transparent);
+  transform: skewX(-45deg) translateX(-100%);
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.glass-panel:hover::after {
+  transform: skewX(-45deg) translateX(50%);
+}
+
+/* 3D Hover Lift */
+.hover-lift {
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s ease;
+  will-change: transform;
+}
+.hover-lift:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.6), inset 0 1px 1px rgba(212, 175, 55, 0.5);
+  z-index: 10;
+}
+
+/* Animated Golden Border (Mask Composite Method) */
+@property --border-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0turn;
+}
+
+@keyframes spin-border-angle {
+  to {
+    --border-angle: 1turn;
+  }
+}
+
+.animated-border-box {
+  position: relative;
+  /* Ensure it doesn't clip the outer glow, but we don't need overflow:hidden on the wrapper anymore */
+}
+
+/* The spinning border layer */
+.animated-border-box::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  padding: 2px; /* Border thickness */
+  background: conic-gradient(
+    from var(--border-angle),
+    transparent 50%,
+    var(--gold) 80%,
+    transparent 100%
+  );
+  /* The mask hollows out the inside so ONLY the 2px padding area shows the background */
+  -webkit-mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: spin-border-angle 4s linear infinite;
+  pointer-events: none;
+  z-index: 10; /* Put it on top of the glass panel */
+}
+
+/* Fix the inner panel so it doesn't double-border */
+.animated-border-box > .glass-panel {
+  border-color: transparent; /* Remove the static border so it doesn't clash */
+}
+
+/* Morphing Profile Picture */
+@keyframes morph-blob {
+  0% { border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%; }
+  50% { border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%; }
+  100% { border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%; }
+}
+.morphing-pfp {
+  animation: morph-blob 8s ease-in-out infinite;
+  transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  box-shadow: 0 10px 30px rgba(212,175,55,0.2), inset 0 0 20px rgba(212,175,55,0.5);
+  border: 3px solid rgba(212,175,55,0.4);
+}
+.morphing-pfp:hover {
+  transform: scale(1.1) rotate(5deg);
+  border-color: var(--gold);
+  box-shadow: 0 15px 40px rgba(212,175,55,0.4), inset 0 0 30px rgba(212,175,55,0.6);
+  animation-duration: 4s; /* Speed up morphing on hover */
+}
+
+/* MacOS Finder UI */
+.mac-sidebar {
+  background: rgba(20, 20, 25, 0.5);
+  border-right: 1px solid rgba(255,255,255,0.05);
+  padding: 1.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 200px;
+}
+.mac-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.mac-sidebar-item:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--text-primary);
+}
+.mac-sidebar-item.active {
+  background: rgba(212, 175, 55, 0.15);
+  color: var(--gold);
+}
+
+/* MacOS Window Controls */
+.window-controls {
+  display: flex;
+  gap: 8px;
+  padding: 1rem;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.window-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+}
+.dot-red { background-color: #ff5f56; }
+.dot-yellow { background-color: #ffbd2e; }
+.dot-green { background-color: #27c93f; }
+
+/* Buttons */
+.btn {
+  display: inline-block;
+  padding: 1rem 2rem;
+  font-family: var(--font-body);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-size: 1rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--glass-border);
+  background: rgba(255,255,255,0.05);
+  backdrop-filter: blur(10px);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, background-color;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.btn:hover {
+  background: rgba(255,255,255,0.1);
+  transform: translateY(-2px) scale(1.02);
+}
+.btn-solid {
+  background: var(--text-primary);
+  color: var(--bg-desktop);
+  border-color: transparent;
+}
+.btn-solid:hover {
+  background: #ffffff;
+}
+
+/* MacOS Window Container */
+.mac-window-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden; /* Lenis wrapper needs this */
+  /* Liquid Glass Base for Window */
+  background: linear-gradient(135deg, rgba(20, 20, 25, 0.4) 0%, rgba(10, 10, 15, 0.6) 100%);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: none;
+}
+
+.mac-window-content {
+  /* Lenis content element */
+  width: 100%;
+  min-height: 100%;
+}
+
+/* App Drawer / Dock */
+.mac-dock-wrapper {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+}
+
+.mac-dock {
+  background: linear-gradient(180deg, rgba(30, 30, 35, 0.6), rgba(15, 15, 20, 0.8));
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 90%;
+  max-width: 600px;
+  justify-content: space-around;
+  flex-wrap: nowrap;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+}
+
+.mac-dock-icon {
+  position: relative;
+  width: 50px;
+  height: 50px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 12px;
+  color: var(--text-secondary);
+  background: rgba(255,255,255,0.02);
+  border: 1px solid transparent;
+  box-sizing: border-box;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  cursor: pointer;
+}
+
+.mac-dock-icon:hover {
+  transform: translateY(-8px) scale(1.15);
+  color: var(--gold);
+  background: rgba(212, 175, 55, 0.05);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+}
+
+.mac-dock-icon.active {
+  color: var(--gold);
+}
+
+.mac-dock-icon.active::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: var(--gold);
+  box-shadow: 0 0 8px var(--gold);
+}
+
+/* Tooltip */
+.dock-tooltip {
+  position: absolute;
+  top: -40px;
+  background: rgba(10, 10, 10, 0.8);
+  backdrop-filter: blur(10px);
+  padding: 0.25rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+  border: 1px solid rgba(255,255,255,0.1);
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.mac-dock-icon:hover .dock-tooltip {
+  opacity: 1;
+  visibility: visible;
+  top: -45px;
+}
+
+/* iOS Mobile Dock (iPhone 18 Pro Max Style) */
+.ios-dock-wrapper {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  padding: 0 1rem 1.5rem 1rem;
+}
+
+.ios-dock {
+  background: rgba(30, 30, 35, 0.75);
+  backdrop-filter: blur(30px) saturate(200%);
+  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  border-radius: 32px;
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.ios-dock-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.ios-dock-icon.active {
+  color: var(--gold);
+}
+
+.ios-dock-label {
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* Split Text Animation Classes */
+.split-line { overflow: hidden; }
+.split-word { overflow: hidden; }
+.char {
+  display: inline-block;
+  will-change: transform, opacity;
+}
+
+/* Layout Utilities */
+.grid { display: grid; gap: var(--spacing-md); }
+.grid-cols-1 { grid-template-columns: 1fr; }
+@media (min-width: 768px) {
+  .grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid-cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .bento-large { grid-column: 1 / span 2; }
+  .bento-wide { grid-column: 2 / span 2; }
+}
+
+/* Responsive Bento Grid */
+.bento-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+.bento-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+.col-span-full { grid-column: 1 / -1; }
+
+@media (min-width: 768px) {
+  .bento-grid { grid-template-columns: repeat(2, 1fr); }
+  .bento-grid-3 { grid-template-columns: repeat(2, 1fr); }
+  .md-col-span-2 { grid-column: span 2; }
+}
+
+@media (min-width: 1024px) {
+  .bento-grid { grid-template-columns: repeat(4, 1fr); }
+  .bento-grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .lg-col-span-2 { grid-column: span 2; }
+  .lg-col-span-4 { grid-column: span 4; }
+  .lg-row-span-2 { grid-row: span 2; }
+}
+
+/* Mobile Tweaks */
+.practice-cycle-flow {
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --spacing-md: 1.5rem;
+    --spacing-xl: 5rem;
+  }
+  .mac-dock { gap: 0.25rem; padding: 0.5rem; border-radius: 16px; }
+  .mac-dock-icon { width: 40px; height: 40px; border-radius: 8px; }
+  .glass-panel { padding: 1.5rem !important; }
+  
+  .practice-cycle-flow {
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  .arrow-down-mobile {
+    transform: rotate(90deg);
+  }
+}
+
+/* GSAP Utilities */
+.gsap-fade-up { opacity: 0; visibility: hidden; will-change: transform, opacity; }

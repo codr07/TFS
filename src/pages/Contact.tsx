@@ -1,25 +1,9 @@
 import { useState } from 'react';
-import { Phone, Mail, MapPin, Send, User, MessageSquare, CheckCircle2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Phone, Mail, MapPin, Send, User, MessageSquare } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 const Contact = () => {
   const [formState, setFormState] = useState({ name: '', phone: '', email: '', message: '' });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    // Simulate API call
-    setTimeout(() => {
-      setIsSubmitting(false);
-      setIsSuccess(true);
-      setTimeout(() => {
-        setIsSuccess(false);
-        setFormState({ name: '', phone: '', email: '', message: '' });
-      }, 3000);
-    }, 1500);
-  };
 
   return (
     <div className="animate-fade-in" style={{ paddingTop: '15vh', paddingBottom: '10vh' }}>
@@ -138,13 +122,19 @@ const Contact = () => {
                   <p style={{ color: 'var(--text-secondary)' }}>We'll get back to you as soon as possible.</p>
                 </div>
                 
-                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '600px', margin: '0 auto' }}>
+                <form action="https://formsubmit.co/contact.tfs.codr@gmail.com" method="POST" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '600px', margin: '0 auto' }}>
+                  <input type="hidden" name="_subject" value="New TFS website enquiry" />
+                  <input type="hidden" name="_replyto" value="email" />
+                  <input type="hidden" name="_captcha" value="false" />
+                  <input type="hidden" name="_template" value="table" />
+                  <input type="hidden" name="_next" value="https://thefretboardsociety.netlify.app/contact" />
                   
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1.5rem' }}>
                     <div style={{ position: 'relative' }}>
                       <User size={18} style={{ position: 'absolute', top: '1rem', left: '1rem', color: 'var(--text-secondary)' }} />
                       <input 
                         type="text" 
+                        name="name"
                         placeholder="Your Name" 
                         required
                         value={formState.name}
@@ -156,6 +146,7 @@ const Contact = () => {
                       <Phone size={18} style={{ position: 'absolute', top: '1rem', left: '1rem', color: 'var(--text-secondary)' }} />
                       <input 
                         type="tel" 
+                        name="phone"
                         placeholder="Your Phone (Optional)" 
                         value={formState.phone}
                         onChange={(e) => setFormState({...formState, phone: e.target.value})}
@@ -168,6 +159,7 @@ const Contact = () => {
                     <Mail size={18} style={{ position: 'absolute', top: '1rem', left: '1rem', color: 'var(--text-secondary)' }} />
                     <input 
                       type="email" 
+                      name="email"
                       placeholder="Your Email Address" 
                       required
                       value={formState.email}
@@ -179,6 +171,7 @@ const Contact = () => {
                   <div style={{ position: 'relative' }}>
                     <MessageSquare size={18} style={{ position: 'absolute', top: '1rem', left: '1rem', color: 'var(--text-secondary)' }} />
                     <textarea 
+                      name="message"
                       placeholder="Your Message..." 
                       rows={5}
                       required
@@ -192,12 +185,11 @@ const Contact = () => {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     type="submit"
-                    disabled={isSubmitting || isSuccess}
                     style={{ 
                       padding: '1rem', 
-                      background: isSuccess ? 'rgba(39,201,63,0.2)' : 'var(--gold)', 
-                      color: isSuccess ? '#27c93f' : '#000', 
-                      border: isSuccess ? '1px solid #27c93f' : 'none',
+                      background: 'var(--gold)', 
+                      color: '#000', 
+                      border: 'none',
                       borderRadius: '12px', 
                       fontSize: '1.1rem', 
                       fontWeight: 600,
@@ -205,25 +197,13 @@ const Contact = () => {
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: '0.5rem',
-                      cursor: (isSubmitting || isSuccess) ? 'default' : 'pointer',
+                      cursor: 'pointer',
                       transition: 'all 0.3s ease'
                     }}
                   >
-                    <AnimatePresence mode="wait">
-                      {isSubmitting ? (
-                        <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                          Sending...
-                        </motion.div>
-                      ) : isSuccess ? (
-                        <motion.div key="success" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <CheckCircle2 size={20} /> Message Sent!
-                        </motion.div>
-                      ) : (
-                        <motion.div key="default" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <Send size={18} /> Send Message
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Send size={18} /> Send Message
+                    </span>
                   </motion.button>
 
                 </form>

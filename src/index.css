@@ -51,7 +51,7 @@ body {
   
   /* Desktop Layout */
   width: 100%;
-  height: 100vh;
+  min-height: 100%;
   overflow: hidden;
   background-image: url('/images/Hero.png');
   background-size: cover;
@@ -169,9 +169,9 @@ p { margin-bottom: var(--spacing-sm); color: var(--text-secondary); }
 /* Liquid Glass Panel Utility (Golden Flavour) */
 .glass-panel {
   padding: 3rem; /* Default desktop padding */
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.08) 0%, rgba(20, 20, 25, 0.3) 100%);
-  backdrop-filter: blur(10px) saturate(140%);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.12) 0%, rgba(20, 20, 25, 0.45) 100%);
+  backdrop-filter: blur(14px) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
   border: 1px solid rgba(212, 175, 55, 0.3);
   box-shadow: 
     0 8px 32px 0 rgba(0, 0, 0, 0.5),
@@ -304,6 +304,10 @@ p { margin-bottom: var(--spacing-sm); color: var(--text-secondary); }
   color: var(--gold);
 }
 
+.about-favorites-content {
+  min-width: 0;
+}
+
 /* MacOS Window Controls */
 .window-controls {
   display: flex;
@@ -357,7 +361,12 @@ p { margin-bottom: var(--spacing-sm); color: var(--text-secondary); }
   left: 0;
   width: 100%;
   height: 100vh;
-  overflow: hidden; /* Lenis wrapper needs this */
+  height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
   /* Liquid Glass Base for Window */
   background: linear-gradient(135deg, rgba(20, 20, 25, 0.4) 0%, rgba(10, 10, 15, 0.6) 100%);
   backdrop-filter: blur(20px) saturate(150%);
@@ -569,8 +578,71 @@ p { margin-bottom: var(--spacing-sm); color: var(--text-secondary); }
   }
   .mac-dock { gap: 0.25rem; padding: 0.5rem; border-radius: 16px; }
   .mac-dock-icon { width: 40px; height: 40px; border-radius: 8px; }
+  .container { padding-left: 1rem; padding-right: 1rem; }
+  .mobile-page-shell,
+  .about-page-shell,
+  .animate-fade-in { padding-top: 5rem !important; padding-bottom: 8rem !important; }
+  .mobile-page-shell > .container,
+  .about-page-shell > .container,
+  .animate-fade-in > .container,
+  .animated-border-box,
+  .animated-border-box > .glass-panel,
+  .animated-border-box > .glass-panel > div,
+  .glass-panel .grid,
+  .glass-panel .about-favorites-layout,
+  .about-favorites-content,
+  .about-favorites-content > div,
+  .tuition-highlight-wrapper {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+  .grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .glass-panel,
+  .animated-border-box,
+  .grid,
+  .container { min-width: 0; max-width: 100%; }
+  .glass-panel { border-radius: 16px; }
+  .window-controls { padding: 0.75rem 1rem !important; }
+  .window-controls + div { min-width: 0; }
+  .mobile-page-shell .container { gap: 2.5rem !important; }
+  .mobile-page-shell h1,
+  .animate-fade-in h1 { font-size: clamp(2.25rem, 11vw, 3.5rem) !important; line-height: 1.05; }
+  .mobile-page-shell h2,
+  .animate-fade-in h2 { font-size: clamp(1.75rem, 8vw, 2.5rem) !important; }
+  .mobile-page-shell h3,
+  .animate-fade-in h3 { overflow-wrap: anywhere; }
+  .mobile-page-shell > .container > .text-center p,
+  .animate-fade-in > .container > .text-center p { font-size: 1rem !important; }
+  .mobile-page-shell .practice-cycle-flow { letter-spacing: 0.04em !important; }
+  .mobile-page-shell .practice-cycle-flow span { text-align: center; }
+  .mobile-page-shell .practice-cycle-flow .arrow-down-mobile { display: block; }
+  .about-page-shell .grid { gap: 1rem !important; }
+  .about-page-shell .glass-panel[style*="aspect-ratio"] { aspect-ratio: auto !important; min-height: 220px; }
+  .about-page-shell .about-favorites-content > div > div { flex-wrap: wrap; gap: 1.5rem !important; }
+  .about-page-shell .about-favorites-content .morphing-pfp { width: 96px !important; height: 96px !important; }
+  footer { padding-top: 3rem !important; padding-bottom: 6rem !important; }
+  footer .container > div > div:first-child { flex-direction: column !important; align-items: flex-start !important; gap: 1.5rem !important; }
+  footer .container > div > div:first-child > div { width: 100%; }
+  footer .container > div > div:first-child > div:first-child { gap: 1rem !important; }
+  footer .container > div > div:first-child > div:first-child img { height: 48px !important; width: auto; }
+  footer .container > div > div:first-child > div:nth-child(2),
+  footer .container > div > div:first-child > div:nth-child(3) { flex-wrap: wrap; gap: 1rem !important; }
+  footer .container > div > div:last-child { flex-direction: column !important; align-items: flex-start !important; }
   .glass-panel { padding: 1.5rem !important; }
   .hero-section { min-height: calc(100vh - 5rem) !important; padding: 4rem 0 8rem; }
+  .about-favorites-layout { flex-direction: column; min-height: 0 !important; }
+  .mac-sidebar {
+    width: 100%;
+    min-width: 0;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding: 1rem;
+  }
+  .mac-sidebar-item { width: 100%; }
+  .about-favorites-content { padding: 2rem 0 0 !important; }
+  .about-favorites-content h2 { font-size: 2rem !important; }
+  .about-favorites-content .morphing-pfp + div { min-width: 0; }
   
   .practice-cycle-flow {
     flex-direction: column;

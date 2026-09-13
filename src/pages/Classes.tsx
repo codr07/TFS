@@ -111,7 +111,7 @@ const Classes = () => {
   };
 
   return (
-    <div style={{ position: 'relative', width: '100%', minHeight: '100vh', paddingTop: '15vh', paddingBottom: '10vh', overflow: 'hidden' }}>
+    <div className="mobile-page-shell" style={{ position: 'relative', width: '100%', minHeight: '100vh', paddingTop: '15vh', paddingBottom: '10vh', overflow: 'hidden' }}>
       
       {/* Background Graphic */}
       <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', opacity: 0.03, pointerEvents: 'none', zIndex: 0 }}>

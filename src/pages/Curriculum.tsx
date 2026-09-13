@@ -3,7 +3,7 @@ import { BookOpen, Music, Guitar, PenTool, Hash, Move, Sparkles, Target } from '
 
 const Curriculum = () => {
   return (
-    <div style={{ position: 'relative', width: '100%', minHeight: '100vh', paddingTop: '15vh', paddingBottom: '10vh', overflow: 'hidden' }}>
+    <div className="mobile-page-shell" style={{ position: 'relative', width: '100%', minHeight: '100vh', paddingTop: '15vh', paddingBottom: '10vh', overflow: 'hidden' }}>
       
       <div className="container" style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: '6rem', maxWidth: '1200px', margin: '0 auto' }}>
         

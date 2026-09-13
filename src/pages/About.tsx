@@ -57,7 +57,7 @@ const About = () => {
   };
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: '100%', minHeight: '100vh', paddingTop: '15vh', paddingBottom: '10vh' }}>
+    <div ref={containerRef} className="about-page-shell" style={{ position: 'relative', width: '100%', minHeight: '100vh', paddingTop: '15vh', paddingBottom: '10vh' }}>
       <div className="container" style={{ display: 'flex', flexDirection: 'column', gap: '4rem' }}>
 
         {/* Main Intro Panel (Macbook Finder UI) */}
@@ -69,7 +69,7 @@ const About = () => {
               <div className="window-dot dot-green"></div>
             </div>
 
-            <div style={{ display: 'flex', flex: 1, minHeight: '450px' }}>
+            <div className="about-favorites-layout" style={{ display: 'flex', flex: 1, minHeight: '450px' }}>
               {/* Sidebar */}
               <div className="mac-sidebar">
                 <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.1em', marginBottom: '0.5rem', paddingLeft: '1rem', marginTop: '1rem' }}>
@@ -87,7 +87,7 @@ const About = () => {
               </div>
 
               {/* Content Area */}
-              <div style={{ flex: 1, padding: '4rem', position: 'relative' }}>
+              <div className="about-favorites-content" style={{ flex: 1, padding: '4rem', position: 'relative' }}>
                 <AnimatePresence mode="wait">
                   {renderContent()}
                 </AnimatePresence>

@@ -44,7 +44,7 @@ const Fees = () => {
                   <h3 style={{ fontSize: '2rem', color: 'var(--text-primary)', marginBottom: '1.5rem' }}>Home Visit</h3>
                   <div style={{ padding: '1.5rem 0', borderTop: '1px solid rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '1.5rem' }}>
                     <span style={{ fontSize: '3rem', fontWeight: 600, color: 'var(--text-primary)' }}>₹1,500</span>
-                    <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>/ SESSION</span>
+                    <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>/ MONTH</span>
                   </div>
                   <p style={{ color: 'var(--text-secondary)', flex: 1, lineHeight: 1.6 }}>
                     Personalized guitar instruction at your location. The ultimate convenience for busy professionals.
@@ -62,7 +62,7 @@ const Fees = () => {
                       <h3 style={{ fontSize: '2rem', color: 'var(--text-primary)', marginBottom: '1.5rem' }}>Tuition</h3>
                       <div style={{ padding: '1.5rem 0', borderTop: '1px solid rgba(212,175,55,0.2)', borderBottom: '1px solid rgba(212,175,55,0.2)', marginBottom: '1.5rem' }}>
                         <span style={{ fontSize: '3.5rem', fontWeight: 700, color: 'var(--gold)', textShadow: '0 0 20px rgba(212,175,55,0.3)' }}>₹1,300</span>
-                        <span style={{ color: 'rgba(212,175,55,0.7)', marginLeft: '0.5rem' }}>/ SESSION</span>
+                        <span style={{ color: 'rgba(212,175,55,0.7)', marginLeft: '0.5rem' }}>/ MONTH</span>
                       </div>
                       <p style={{ color: 'var(--text-secondary)', flex: 1, lineHeight: 1.6 }}>
                         Focused, one-on-one instruction at the designated learning location. Our most popular format for rapid progression.
@@ -80,7 +80,7 @@ const Fees = () => {
                   <h3 style={{ fontSize: '2rem', color: 'var(--text-primary)', marginBottom: '1.5rem' }}>Online</h3>
                   <div style={{ padding: '1.5rem 0', borderTop: '1px solid rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.05)', marginBottom: '1.5rem' }}>
                     <span style={{ fontSize: '3rem', fontWeight: 600, color: 'var(--text-primary)' }}>₹850</span>
-                    <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>/ SESSION</span>
+                    <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>/ MONTH</span>
                   </div>
                   <p style={{ color: 'var(--text-secondary)', flex: 1, lineHeight: 1.6 }}>
                     Structured individual guitar lessons online. Learn from anywhere without compromising on quality.
@@ -101,7 +101,7 @@ const Fees = () => {
 
                     <div style={{ flex: '1 1 300px', padding: '1.5rem', background: 'rgba(212,175,55,0.05)', borderRadius: '16px', border: '1px solid rgba(212,175,55,0.2)' }}>
                       <h4 style={{ color: 'var(--text-primary)', fontSize: '1.25rem', marginBottom: '0.5rem' }}>Dotara Style Ukulele</h4>
-                      <div style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--gold)', marginBottom: '0.5rem' }}>₹1,500 <span style={{ fontSize: '1rem', color: 'rgba(212,175,55,0.7)', fontWeight: 'normal' }}>/ SESSION</span></div>
+                      <div style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--gold)', marginBottom: '0.5rem' }}>₹1,500 <span style={{ fontSize: '1rem', color: 'rgba(212,175,55,0.7)', fontWeight: 'normal' }}>/ MONTH</span></div>
                       <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '0.95rem' }}>Flat rate for specialized Dotara instruction (All formats).</p>
                     </div>
 

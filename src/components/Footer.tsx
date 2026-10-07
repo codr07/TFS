@@ -26,6 +26,8 @@ const Footer = () => {
               <Link to="/fees" className="hover-pill" style={{ color: 'var(--text-primary)' }}>Fees</Link>
               <Link to="/faq" className="hover-pill" style={{ color: 'var(--text-primary)' }}>FAQ</Link>
               <Link to="/contact" className="hover-pill" style={{ color: 'var(--text-primary)' }}>Contact</Link>
+              <Link to="/terms" className="hover-pill" style={{ color: 'var(--text-primary)' }}>T&C</Link>
+              <Link to="/privacypolicy" className="hover-pill" style={{ color: 'var(--text-primary)' }}>Privacy Policy</Link>
             </div>
 
             {/* Contact Info */}

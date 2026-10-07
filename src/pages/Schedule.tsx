@@ -1,111 +1,24 @@
-import { Link } from 'react-router-dom';
-import { Calendar, Monitor, Users, MapPin, Clock } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
+import { Calendar, Clock, Guitar, Mail, MapPin, Phone, Send, User } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
+type ScheduleItem = { id?: string; title: string; description?: string; day_label: string; time_label: string; format?: string; active?: boolean };
+const fallbackSchedule: ScheduleItem[] = [
+  { title: 'Official class window', day_label: 'Friday', time_label: '8pm - 11pm', description: 'Core lessons and one-to-one sessions.' },
+  { title: 'Official class window', day_label: 'Saturday', time_label: '10am - 1pm', description: 'Group and personalized sessions.' },
+  { title: 'Official class window', day_label: 'Saturday', time_label: '7pm - 11pm', description: 'Evening learning sessions.' },
+  { title: 'Official class window', day_label: 'Sunday', time_label: '10am - 1pm', description: 'Weekend practice and lessons.' },
+  { title: 'Official class window', day_label: 'Sunday', time_label: '7pm - 11pm', description: 'Evening learning sessions.' },
+];
 const Schedule = () => {
-  const cardStyle = { padding: '2rem', display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-start' };
-  
-  const IconBox = ({ color, bg, icon: Icon }: { color: string, bg: string, icon: any }) => (
-    <div style={{ padding: '0.75rem', background: bg, borderRadius: '12px', marginBottom: '1.25rem', display: 'inline-flex' }}>
-      <Icon size={24} color={color} />
-    </div>
-  );
-
-  return (
-    <div className="animate-fade-in" style={{ paddingTop: '15vh', paddingBottom: '10vh' }}>
-      <div className="container" style={{ display: 'flex', flexDirection: 'column', gap: '4rem' }}>
-        
-        {/* Header */}
-        <div className="text-center gsap-fade-up">
-          <h1 className="gsap-split-text" style={{ fontSize: 'clamp(3rem, 6vw, 5rem)', marginBottom: '1.5rem' }}>
-            Class Schedule.
-          </h1>
-          <p style={{ fontSize: '1.25rem', maxWidth: '700px', margin: '0 auto', color: 'var(--text-secondary)' }}>
-            We operate on a flexible hybrid model with dedicated days for deep work.
-          </p>
-        </div>
-
-        {/* Finder Window UI */}
-        <div className="animated-border-box gsap-fade-up">
-          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
-            
-            {/* Window Controls */}
-            <div className="window-controls" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', gap: '8px' }}>
-              <div className="window-dot dot-red"></div>
-              <div className="window-dot dot-yellow"></div>
-              <div className="window-dot dot-green"></div>
-            </div>
-            
-            {/* Main Window Content */}
-            <div style={{ padding: '3rem' }}>
-              
-              {/* Primary Schedule Glass Panel */}
-              <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center', position: 'relative', overflow: 'hidden', marginBottom: '4rem' }}>
-                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '4px', background: 'linear-gradient(90deg, transparent, var(--gold), transparent)' }}></div>
-                <IconBox icon={Calendar} color="var(--gold)" bg="rgba(212,175,55,0.1)" />
-                <h2 style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>Official Class Days</h2>
-                <div style={{ fontSize: '2.5rem', fontWeight: 600, color: 'var(--gold)', letterSpacing: '0.05em', marginBottom: '1.5rem' }}>
-                  FRIDAY &amp; SUNDAY
-                </div>
-                <p style={{ color: 'var(--text-secondary)', maxWidth: '600px', margin: '0 auto', fontSize: '1.1rem', lineHeight: 1.6 }}>
-                  Our core curriculum is delivered on weekends to ensure maximum focus without disrupting your weekday schedule. Classes run through a combination of group and personalized sessions.
-                </p>
-              </div>
-
-              {/* Available Formats Bento Grid */}
-              <div>
-                <h2 style={{ fontSize: '2rem', marginBottom: '2rem', color: 'var(--text-primary)', textAlign: 'center' }}>Available Formats</h2>
-                <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
-                  
-                  <div className="glass-panel hover-lift" style={cardStyle}>
-                    <IconBox icon={Users} color="#00e5ff" bg="rgba(0,229,255,0.1)" />
-                    <h3 style={{ color: 'var(--text-primary)', marginBottom: '0.75rem', fontSize: '1.25rem' }}>Group Sessions</h3>
-                    <p style={{ color: 'var(--text-secondary)', flex: 1, margin: 0, lineHeight: 1.6 }}>
-                      Collaborative learning. Develop rhythm awareness, musical confidence, and the vital skill of playing perfectly in sync with others.
-                    </p>
-                  </div>
-
-                  <div className="glass-panel hover-lift" style={cardStyle}>
-                    <IconBox icon={Clock} color="var(--gold)" bg="rgba(212,175,55,0.1)" />
-                    <h3 style={{ color: 'var(--text-primary)', marginBottom: '0.75rem', fontSize: '1.25rem' }}>One-on-One</h3>
-                    <p style={{ color: 'var(--text-secondary)', flex: 1, margin: 0, lineHeight: 1.6 }}>
-                      A focused environment built entirely around you. Receive personalized instruction, hyper-focused technical feedback, and flexible progression.
-                    </p>
-                  </div>
-
-                  <div className="glass-panel hover-lift" style={cardStyle}>
-                    <IconBox icon={Monitor} color="#ff3366" bg="rgba(255,51,102,0.1)" />
-                    <h3 style={{ color: 'var(--text-primary)', marginBottom: '0.75rem', fontSize: '1.25rem' }}>Online Classes</h3>
-                    <p style={{ color: 'var(--text-secondary)', flex: 1, margin: 0, lineHeight: 1.6 }}>
-                      Learn from anywhere in the world. High-quality remote sessions tailored to ensure you never miss a beat regardless of your location.
-                    </p>
-                  </div>
-
-                  <div className="glass-panel hover-lift" style={cardStyle}>
-                    <IconBox icon={MapPin} color="#9d4edd" bg="rgba(157,78,221,0.1)" />
-                    <h3 style={{ color: 'var(--text-primary)', marginBottom: '0.75rem', fontSize: '1.25rem' }}>In-Person (Bengaluru)</h3>
-                    <p style={{ color: 'var(--text-secondary)', flex: 1, margin: 0, lineHeight: 1.6 }}>
-                      Step into the studio. Tactile, hands-on instruction available exclusively for students residing in Bengaluru.
-                    </p>
-                  </div>
-
-                </div>
-              </div>
-
-            </div>
-          </div>
-        </div>
-
-        {/* CTA */}
-        <div className="text-center gsap-fade-up" style={{ marginTop: '2rem' }}>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '1.1rem' }}>Ready to reserve your slot or check current batch timings?</p>
-          <Link to="/contact" className="btn btn-solid" style={{ padding: '1rem 3rem', fontSize: '1.1rem' }}>
-            CHECK AVAILABILITY
-          </Link>
-        </div>
-
-      </div>
-    </div>
-  );
+  const [schedule, setSchedule] = useState<ScheduleItem[]>(fallbackSchedule);
+  const [formState, setFormState] = useState({ name: '', phone: '', email: '', instrument: 'Guitar', format: 'Home Tuition', slot: fallbackSchedule[0].day_label + ' ' + fallbackSchedule[0].time_label });
+  const [submitStatus, setSubmitStatus] = useState('');
+  useEffect(() => { void supabase.from('schedule_items').select('*').eq('active', true).order('sort_order').then(({ data }) => { if (data?.length) { setSchedule(data); setFormState((current) => ({ ...current, slot: `${data[0].day_label} ${data[0].time_label}` })); } }); }, []);
+  const handleBookingSubmit = async (event: FormEvent) => { event.preventDefault(); setSubmitStatus('submitting'); const { error } = await supabase.from('bookings').insert([formState]); setSubmitStatus(error ? 'error' : 'success'); if (!error) setFormState({ ...formState, name: '', phone: '', email: '' }); };
+  return <div className="animate-fade-in" style={{ paddingTop: '15vh', paddingBottom: '10vh' }}><div className="container" style={{ display: 'flex', flexDirection: 'column', gap: '3rem' }}><div className="text-center"><h1>Class Schedule.</h1><p style={{ fontSize: '1.25rem' }}>Current availability managed by TFS Control.</p></div><section className="glass-panel" style={{ padding: '2.5rem' }}><div className="text-center"><Calendar size={28} color="var(--gold)" /><h2 style={{ fontSize: '2rem' }}>Available class windows</h2></div><div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '1rem' }}>{schedule.map((item) => <article className="glass-panel hover-lift" key={item.id || `${item.day_label}-${item.time_label}`} style={{ padding: '1.5rem' }}><Clock size={20} color="var(--gold)" /><h3 style={{ color: 'var(--text-primary)', fontSize: '1.3rem', marginTop: '1rem' }}>{item.day_label}</h3><strong style={{ color: 'var(--gold)' }}>{item.time_label}</strong><p>{item.description}</p>{item.format && <small>{item.format}</small>}</article>)}</div></section><section className="glass-panel" style={{ padding: '2.5rem' }}><div className="text-center"><h2 style={{ fontSize: '2rem' }}>Book a session</h2><p>Choose one of the live schedule windows and we will confirm your slot.</p></div><form onSubmit={handleBookingSubmit} style={{ display: 'grid', gap: '1rem', maxWidth: '650px', margin: '2rem auto 0' }}><Input icon={User} placeholder="Your name" value={formState.name} onChange={(value) => setFormState({ ...formState, name: value })} /><Input icon={Phone} placeholder="Your phone" value={formState.phone} onChange={(value) => setFormState({ ...formState, phone: value })} /><Input icon={Mail} type="email" placeholder="Your email" value={formState.email} onChange={(value) => setFormState({ ...formState, email: value })} /><div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1rem' }}><Select icon={Guitar} value={formState.instrument} options={['Guitar', 'Ukulele (General)', 'Ukulele (Dotara)']} onChange={(value) => setFormState({ ...formState, instrument: value })} /><Select icon={MapPin} value={formState.format} options={['Home Tuition', 'Home Visit', 'Online Tuition']} onChange={(value) => setFormState({ ...formState, format: value })} /></div><Select icon={Clock} value={formState.slot} options={schedule.map((item) => `${item.day_label} ${item.time_label}`)} onChange={(value) => setFormState({ ...formState, slot: value })} /><button className="admin-save" type="submit" disabled={submitStatus === 'submitting'}><Send size={17} />{submitStatus === 'submitting' ? 'Booking...' : 'Book session'}</button>{submitStatus === 'success' && <p>Booking submitted successfully.</p>}{submitStatus === 'error' && <p style={{ color: '#ffaaa4' }}>Unable to submit booking.</p>}</form></section></div></div>;
 };
-
+const Input = ({ icon: Icon, placeholder, value, onChange, type = 'text' }: { icon: typeof User; placeholder: string; value: string; onChange: (value: string) => void; type?: string }) => <div style={{ position: 'relative' }}><Icon size={18} style={{ position: 'absolute', top: '.9rem', left: '1rem', color: 'var(--text-secondary)' }} /><input required type={type} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} style={{ width: '100%', padding: '.9rem 1rem .9rem 3rem', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.12)', borderRadius: '8px', color: 'var(--text-primary)', font: 'inherit' }} /></div>;
+const Select = ({ icon: Icon, value, options, onChange }: { icon: typeof User; value: string; options: string[]; onChange: (value: string) => void }) => <div style={{ position: 'relative' }}><Icon size={18} style={{ position: 'absolute', top: '.9rem', left: '1rem', color: 'var(--text-secondary)' }} /><select value={value} onChange={(event) => onChange(event.target.value)} style={{ width: '100%', padding: '.9rem 1rem .9rem 3rem', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.12)', borderRadius: '8px', color: 'var(--text-primary)', font: 'inherit' }}>{options.map((option) => <option key={option}>{option}</option>)}</select></div>;
 export default Schedule;

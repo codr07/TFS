@@ -11,6 +11,13 @@ import Schedule from './pages/Schedule';
 import Fees from './pages/Fees';
 import Faq from './pages/Faq';
 import Contact from './pages/Contact';
+import TfsControl from './pages/TfsControl';
+import Terms from './pages/Terms';
+import PrivacyPolicy from './pages/PrivacyPolicy';
+import Login from './pages/Login';
+import StudentDashboard from './pages/StudentDashboard';
+import { AuthProvider } from './contexts/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -29,7 +36,7 @@ function App() {
         {loading && <Preloader key="preloader" />}
       </AnimatePresence>
       
-      {!loading && (
+      <AuthProvider>
         <Routes>
           <Route path="/" element={<Layout />}>
             <Route index element={<Home />} />
@@ -40,9 +47,29 @@ function App() {
             <Route path="fees" element={<Fees />} />
             <Route path="faq" element={<Faq />} />
             <Route path="contact" element={<Contact />} />
+            <Route path="login" element={<Login />} />
+            <Route path="tfs-students/login" element={<Login expectedRole="student" redirectPath="/tfs-students" />} />
+            <Route path="tfscontrol/login" element={<Login expectedRole="admin" redirectPath="/tfscontrol" />} />
+            
+            {/* Protected Admin Route */}
+            <Route path="tfscontrol" element={
+              <ProtectedRoute allowedRoles={['admin']} loginPath="/tfscontrol/login">
+                <TfsControl />
+              </ProtectedRoute>
+            } />
+
+            {/* Protected Student Route */}
+            <Route path="tfs-students" element={
+              <ProtectedRoute allowedRoles={['student']} loginPath="/tfs-students/login">
+                <StudentDashboard />
+              </ProtectedRoute>
+            } />
+
+            <Route path="terms" element={<Terms />} />
+            <Route path="privacypolicy" element={<PrivacyPolicy />} />
           </Route>
         </Routes>
-      )}
+      </AuthProvider>
     </>
   );
 }

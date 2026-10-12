@@ -65,43 +65,43 @@ const routeMetaMap: Record<string, PageMeta> = {
     title: 'Student Admission Form | The Fretboard Society',
     description: 'Official digital admission form for new students enrolling into acoustic guitar or ukulele programs at The Fretboard Society.',
     keywords: 'guitar admission, enroll music class, TFS student registration',
-    shareImage: `${BASE_URL}/images/logo_t.png`,
+    shareImage: `${BASE_URL}/images/admission-share.png`,
   },
   '/feepayment': {
     title: 'Monthly Fee Payment | The Fretboard Society',
     description: 'Secure student portal for monthly tuition fee payments with instant UPI verification and digital receipt generation.',
     keywords: 'pay guitar fee, TFS fee payment, student portal upi',
-    shareImage: `${BASE_URL}/images/logo_t.png`,
+    shareImage: `${BASE_URL}/images/fee-share.png`,
   },
   '/login': {
     title: 'Portal Login | The Fretboard Society',
     description: 'Sign in to access your student corner or TFS Control administration center.',
     keywords: 'TFS login, student login, administration portal',
-    shareImage: `${BASE_URL}/images/logo_t.png`,
+    shareImage: DEFAULT_SHARE_IMAGE,
   },
   '/tfs-students/login': {
     title: 'Student Login | The Fretboard Society',
     description: 'Student corner login for enrolled learners at The Fretboard Society.',
     keywords: 'student portal login, fretboard society student corner',
-    shareImage: `${BASE_URL}/images/logo_t.png`,
+    shareImage: `${BASE_URL}/images/fee-share.png`,
   },
   '/tfscontrol/login': {
     title: 'Admin Login | TFS Control',
     description: 'Administrative access for The Fretboard Society management portal.',
     keywords: 'admin login, TFS control',
-    shareImage: `${BASE_URL}/images/logo_t.png`,
+    shareImage: DEFAULT_SHARE_IMAGE,
   },
   '/tfs-students': {
     title: 'Student Corner Dashboard | The Fretboard Society',
     description: 'Access your lesson schedules, payment history, notifications, and direct student requests.',
     keywords: 'student dashboard, lesson schedule, payment status',
-    shareImage: `${BASE_URL}/images/logo_t.png`,
+    shareImage: `${BASE_URL}/images/fee-share.png`,
   },
   '/tfscontrol': {
     title: 'TFS Control Center | Management Console',
     description: 'Comprehensive administrative dashboard for admissions, bookings, fees, and curriculum management.',
     keywords: 'management portal, admin console, TFS control',
-    shareImage: `${BASE_URL}/images/logo_t.png`,
+    shareImage: DEFAULT_SHARE_IMAGE,
   },
   '/terms': {
     title: 'Terms & Conditions | The Fretboard Society',
@@ -171,10 +171,15 @@ export const SeoManager = () => {
     updateMetaTag('meta[property="og:url"]', 'content', fullUrl);
     updateMetaTag('meta[property="og:image"]', 'content', shareImage);
     updateMetaTag('meta[property="og:image:secure_url"]', 'content', shareImage);
+    updateMetaTag('meta[property="og:image:type"]', 'content', 'image/png');
+    updateMetaTag('meta[property="og:image:width"]', 'content', '1200');
+    updateMetaTag('meta[property="og:image:height"]', 'content', '630');
     updateMetaTag('meta[property="og:image:alt"]', 'content', `${meta.title} - ${SITE_NAME}`);
     updateMetaTag('meta[property="og:site_name"]', 'content', SITE_NAME);
 
     // Twitter Card
+    updateMetaTag('meta[name="twitter:card"]', 'content', 'summary_large_image');
+    updateMetaTag('meta[property="twitter:card"]', 'content', 'summary_large_image');
     updateMetaTag('meta[name="twitter:title"]', 'content', meta.title);
     updateMetaTag('meta[property="twitter:title"]', 'content', meta.title);
     updateMetaTag('meta[name="twitter:description"]', 'content', meta.description);

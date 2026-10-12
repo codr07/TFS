@@ -1,10 +1,13 @@
 const fs = require('fs');
 
-const template = fs.readFileSync('index.html', 'utf8');
+// Read the BUILT dist/index.html so we keep the correct hashed bundle references
+// (e.g. /assets/index-XXXX.js and /assets/index-XXXX.css).
+const template = fs.readFileSync('dist/index.html', 'utf8');
 
 function generateHtml(options) {
   let content = template;
   content = content.replace(/<title>[\s\S]*?<\/title>/, `<title>${options.title}</title>`);
+  content = content.replace(/<meta name="description" content="[\s\S]*?" \/>/, `<meta name="description" content="${options.description}" />`);
   content = content.replace(/<link rel="canonical" href="[\s\S]*?" \/>/, `<link rel="canonical" href="${options.url}" />`);
   content = content.replace(/<meta property="og:title" content="[\s\S]*?" \/>/, `<meta property="og:title" content="${options.title}" />`);
   content = content.replace(/<meta property="og:description" content="[\s\S]*?" \/>/, `<meta property="og:description" content="${options.description}" />`);
@@ -25,14 +28,14 @@ function generateHtml(options) {
 
 const pages = [
   {
-    dir: 'public/admissionform',
+    dir: 'dist/admissionform',
     title: 'Student Admission Form | The Fretboard Society',
     description: 'Official digital admission form for new students enrolling into acoustic guitar or ukulele programs at The Fretboard Society.',
     url: 'https://thefretboardsociety.netlify.app/admissionform',
     image: 'https://thefretboardsociety.netlify.app/images/admission-share.png'
   },
   {
-    dir: 'public/feepayment',
+    dir: 'dist/feepayment',
     title: 'Monthly Fee Payment | The Fretboard Society',
     description: 'Secure student portal for monthly tuition fee payments with instant UPI verification and digital receipt generation.',
     url: 'https://thefretboardsociety.netlify.app/feepayment',

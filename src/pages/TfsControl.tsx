@@ -4,20 +4,27 @@ import { supabase, supabaseAdmin } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { BookOpen, Calendar, Check, CircleDollarSign, FileText, Guitar, LayoutDashboard, LogOut, MessageSquare, Percent, Pencil, Plus, Puzzle, Reply, Search, Trash2, Users, X } from 'lucide-react';
 
-type Section = 'overview' | 'admissions' | 'content' | 'bookings' | 'messages' | 'discounts' | 'fees' | 'addons' | 'schedule' | 'curriculum' | 'students';
+type Section = 'overview' | 'admissions' | 'bookings' | 'messages' | 'discounts' | 'fees' | 'addons' | 'schedule' | 'curriculum' | 'students';
 type RecordValue = Record<string, any>;
 type AdmissionFeed = { headers: string[]; rows: string[][]; spreadsheetUrl?: string };
 const navItems: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: 'overview', label: 'Dashboard', icon: LayoutDashboard }, { id: 'admissions', label: 'Admissions', icon: FileText }, { id: 'content', label: 'Page content', icon: FileText }, { id: 'bookings', label: 'Bookings', icon: Calendar }, { id: 'messages', label: 'Student messages', icon: MessageSquare }, { id: 'discounts', label: 'Coupons', icon: Percent }, { id: 'fees', label: 'Fee plans', icon: CircleDollarSign }, { id: 'addons', label: 'Add-ons', icon: Puzzle }, { id: 'schedule', label: 'Schedule', icon: Calendar }, { id: 'curriculum', label: 'Curriculum', icon: BookOpen }, { id: 'students', label: 'Students', icon: Users },
+  { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'admissions', label: 'Admissions', icon: FileText },
+  { id: 'bookings', label: 'Bookings', icon: Calendar },
+  { id: 'messages', label: 'Student messages', icon: MessageSquare },
+  { id: 'discounts', label: 'Coupons', icon: Percent },
+  { id: 'fees', label: 'Fee plans', icon: CircleDollarSign },
+  { id: 'addons', label: 'Add-ons', icon: Puzzle },
+  { id: 'schedule', label: 'Schedule', icon: Calendar },
+  { id: 'curriculum', label: 'Curriculum', icon: BookOpen },
+  { id: 'students', label: 'Students', icon: Users },
 ];
 
-const emptyContent = { page_key: 'home', headline: '', subline: '', body: '' };
 const TfsControl = () => {
   const { signOut } = useAuth();
   const [section, setSection] = useState<Section>('overview');
   const [bookings, setBookings] = useState<RecordValue[]>([]);
   const [students, setStudents] = useState<RecordValue[]>([]);
-  const [content, setContent] = useState<RecordValue[]>([]);
   const [discounts, setDiscounts] = useState<RecordValue[]>([]);
   const [fees, setFees] = useState<RecordValue[]>([]);
   const [scheduleItems, setScheduleItems] = useState<RecordValue[]>([]);
@@ -31,12 +38,12 @@ const TfsControl = () => {
   const [error, setError] = useState('');
   const [editingBooking, setEditingBooking] = useState<RecordValue | null>(null);
   const [editingStudent, setEditingStudent] = useState<RecordValue | null>(null);
-  const [editingContent, setEditingContent] = useState<RecordValue>(emptyContent);
   const [editingDiscount, setEditingDiscount] = useState<RecordValue | null>(null);
   const [editingFee, setEditingFee] = useState<RecordValue | null>(null);
 
   const notify = (message: string) => { setNotice(message); setError(''); window.setTimeout(() => setNotice(''), 3000); };
   const fail = (message: string) => { setError(message); setNotice(''); };
+
   const loadAdmissions = async () => {
     const apiUrl = import.meta.env.VITE_ADMISSION_API_URL as string | undefined;
     if (!apiUrl) return;
@@ -67,14 +74,27 @@ const TfsControl = () => {
     if (!result.success) throw new Error(result.error || 'Admission database returned an error.');
     setAdmissionFeed({ headers: result.headers || [], rows: result.rows || [], spreadsheetUrl: result.spreadsheetUrl });
   };
+
   const loadData = async () => {
     setLoading(true);
+    setError('');
     const db = supabaseAdmin;
-    const [bookingResult, studentResult, roleStudentResult, contentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult] = await Promise.all([
+
+    // Run queries individually so one table error doesn't wipe everything else
+    const [
+      bookingResult,
+      studentResult,
+      roleStudentResult,
+      discountResult,
+      feeResult,
+      scheduleResult,
+      curriculumResult,
+      addonResult,
+      requestResult,
+    ] = await Promise.all([
       db.from('bookings').select('*').order('created_at', { ascending: false }),
       db.from('student_profiles').select('*').order('created_at', { ascending: false }),
       db.from('profiles').select('*').eq('role', 'student').order('created_at', { ascending: false }),
-      db.from('site_content').select('*').order('page_key'),
       db.from('discounts').select('*').order('updated_at', { ascending: false }),
       db.from('fee_plans').select('*').order('updated_at', { ascending: false }),
       db.from('schedule_items').select('*').order('sort_order'),
@@ -82,15 +102,19 @@ const TfsControl = () => {
       db.from('add_ons').select('*').order('sort_order'),
       db.from('student_requests').select('*').order('created_at', { ascending: false }),
     ]);
-    const firstError = [bookingResult, studentResult, roleStudentResult, contentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult].find((result) => result.error)?.error;
-    if (firstError) console.warn('Supabase query warning:', firstError.message);
+
+    // Log any query-level warnings individually — don't fail on a missing optional table
+    const allResults = [bookingResult, studentResult, roleStudentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult];
+    for (const result of allResults) {
+      if (result.error) console.warn('Supabase query warning:', result.error.message);
+    }
 
     let authStudentUsers: RecordValue[] = [];
     try {
       const { data: usersData } = await db.auth.admin.listUsers();
       if (usersData?.users) {
-        authStudentUsers = usersData.users.filter((u: any) => 
-          u.app_metadata?.role === 'student' || 
+        authStudentUsers = usersData.users.filter((u: any) =>
+          u.app_metadata?.role === 'student' ||
           u.user_metadata?.role === 'student' ||
           u.role === 'student'
         ).map((u: any) => ({
@@ -167,24 +191,26 @@ const TfsControl = () => {
 
     const mergedStudents = Array.from(studentMap.values());
 
-    setBookings(bookingResult.data || []); 
-    setStudents(mergedStudents); 
-    setContent(contentResult.data || []); 
-    setDiscounts(discountResult.data || []); 
-    setFees(feeResult.data || []); 
-    setScheduleItems(scheduleResult.data || []); 
-    setCurriculumItems(curriculumResult.data || []); 
-    setAddons(addonResult.data || []); 
-    setRequests(requestResult.data || []); 
+    setBookings(bookingResult.data || []);
+    setStudents(mergedStudents);
+    setDiscounts(discountResult.data || []);
+    setFees(feeResult.data || []);
+    setScheduleItems(scheduleResult.data || []);
+    setCurriculumItems(curriculumResult.data || []);
+    setAddons(addonResult.data || []);
+    setRequests(requestResult.data || []);
     setLoading(false);
+
     try { await loadAdmissions(); } catch (admissionError) { fail(admissionError instanceof Error ? admissionError.message : 'Unable to load admissions.'); }
   };
+
   useEffect(() => { void loadData(); }, []);
 
   const filteredStudents = useMemo(() => {
     const query = search.trim().toLowerCase();
     return query ? students.filter((student) => `${student.first_name || ''} ${student.last_name || ''} ${student.email || ''} ${student.id}`.toLowerCase().includes(query)) : students;
   }, [search, students]);
+
   const remove = async (table: string, id: string, refreshMessage: string) => {
     if (!window.confirm('Delete this record permanently?')) return;
     const { error: deleteError } = await supabaseAdmin.from(table).delete().eq('id', id);
@@ -199,13 +225,14 @@ const TfsControl = () => {
         // ignore profile cleanup error
       }
     }
-    notify(refreshMessage); 
+    notify(refreshMessage);
     void loadData();
   };
+
   const saveRecord = async (table: string, values: RecordValue, id?: string) => {
-    const payload = { ...values }; 
-    delete payload.id; 
-    delete payload.created_at; 
+    const payload = { ...values };
+    delete payload.id;
+    delete payload.created_at;
     delete payload.updated_at;
     delete payload.role;
     delete payload._roleOnly;
@@ -231,7 +258,7 @@ const TfsControl = () => {
       }
     }
 
-    notify('Saved successfully.'); 
+    notify('Saved successfully.');
     void loadData();
   };
 
@@ -241,7 +268,6 @@ const TfsControl = () => {
     {section === 'bookings' && <Bookings bookings={bookings} loading={loading} editing={editingBooking} setEditing={setEditingBooking} save={saveRecord} remove={remove} />}
     {section === 'messages' && <MessageManager requests={requests} save={saveRecord} remove={remove} />}
     {section === 'students' && <Students students={filteredStudents} search={search} setSearch={setSearch} editing={editingStudent} setEditing={setEditingStudent} save={saveRecord} remove={remove} />}
-    {section === 'content' && <ContentEditor content={content} editing={editingContent} setEditing={setEditingContent} save={saveRecord} />}
     {section === 'discounts' && <DiscountManager discounts={discounts} editing={editingDiscount} setEditing={setEditingDiscount} save={saveRecord} remove={remove} />}
     {section === 'fees' && <FeeManager fees={fees} editing={editingFee} setEditing={setEditingFee} save={saveRecord} remove={remove} />}
     {section === 'addons' && <CatalogManager title="Add-ons" table="add_ons" items={addons} fields={['name', 'description', 'amount', 'billing_period', 'sort_order', 'active']} save={saveRecord} remove={remove} />}
@@ -272,15 +298,14 @@ const Admissions = ({ feed, onRefresh }: { feed: AdmissionFeed; onRefresh: () =>
   </section>;
 };
 
-const Overview = ({ bookings, students, fees, onNavigate, loading }: { bookings: RecordValue[]; students: RecordValue[]; fees: RecordValue[]; onNavigate: (section: Section) => void; loading: boolean }) => <><section className="admin-stat-grid"><Stat label="New bookings" value={bookings.filter((booking) => booking.status === 'new').length} icon={Calendar} /><Stat label="Active students" value={students.length} icon={Users} /><Stat label="Fee plans" value={fees.length} icon={CircleDollarSign} /></section><div className="admin-grid-two"><section className="admin-panel"><PanelHeading eyebrow="Latest enquiries" title="Booking inbox" action="Manage bookings" onClick={() => onNavigate('bookings')} />{loading ? <p className="admin-empty">Loading records...</p> : bookings.length === 0 ? <p className="admin-empty">No bookings yet.</p> : bookings.slice(0, 5).map((booking) => <div className="booking-row" key={booking.id}><div className="booking-avatar">{(booking.name || 'S').charAt(0).toUpperCase()}</div><div className="booking-person"><b>{booking.name}</b><small>{booking.email} · {booking.instrument || 'Instrument pending'}</small></div><span className="booking-badge">{booking.status || 'new'}</span></div>)}</section><section className="admin-panel"><PanelHeading eyebrow="Workspace shortcuts" title="Manage TFS" /><button className="admin-action" onClick={() => onNavigate('content')}><FileText size={18} /> Edit page content</button><button className="admin-action" onClick={() => onNavigate('discounts')}><Percent size={18} /> Create discount coupon</button><button className="admin-action" onClick={() => onNavigate('students')}><Users size={18} /> Review student profiles</button></section></div></>;
+const Overview = ({ bookings, students, fees, onNavigate, loading }: { bookings: RecordValue[]; students: RecordValue[]; fees: RecordValue[]; onNavigate: (section: Section) => void; loading: boolean }) => <><section className="admin-stat-grid"><Stat label="New bookings" value={bookings.filter((booking) => booking.status === 'new').length} icon={Calendar} /><Stat label="Active students" value={students.length} icon={Users} /><Stat label="Fee plans" value={fees.length} icon={CircleDollarSign} /></section><div className="admin-grid-two"><section className="admin-panel"><PanelHeading eyebrow="Latest enquiries" title="Booking inbox" action="Manage bookings" onClick={() => onNavigate('bookings')} />{loading ? <p className="admin-empty">Loading records...</p> : bookings.length === 0 ? <p className="admin-empty">No bookings yet.</p> : bookings.slice(0, 5).map((booking) => <div className="booking-row" key={booking.id}><div className="booking-avatar">{(booking.name || 'S').charAt(0).toUpperCase()}</div><div className="booking-person"><b>{booking.name}</b><small>{booking.email} · {booking.instrument || 'Instrument pending'}</small></div><span className="booking-badge">{booking.status || 'new'}</span></div>)}</section><section className="admin-panel"><PanelHeading eyebrow="Workspace shortcuts" title="Manage TFS" /><button className="admin-action" onClick={() => onNavigate('discounts')}><Percent size={18} /> Create discount coupon</button><button className="admin-action" onClick={() => onNavigate('students')}><Users size={18} /> Review student profiles</button><button className="admin-action" onClick={() => onNavigate('fees')}><CircleDollarSign size={18} /> Manage fee plans</button></section></div></>;
+
 const Stat = ({ label, value, icon: Icon }: { label: string; value: number; icon: typeof Calendar }) => <div className="admin-stat"><Icon size={20} color="var(--gold)" /><span>{label}</span><strong>{value}</strong></div>;
 const PanelHeading = ({ eyebrow, title, action, onClick }: { eyebrow: string; title: string; action?: string; onClick?: () => void }) => <div className="admin-panel-heading"><div><p className="admin-kicker">{eyebrow}</p><h2>{title}</h2></div>{action && <button className="admin-link" onClick={onClick}>{action}</button>}</div>;
 
 const Bookings = ({ bookings, loading, editing, setEditing, save, remove }: { bookings: RecordValue[]; loading: boolean; editing: RecordValue | null; setEditing: (value: RecordValue | null) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => <section className="admin-panel"><PanelHeading eyebrow="Enquiries from your website" title="Booking management" />{editing && <RecordForm title="Update booking" values={editing} fields={['name', 'email', 'phone', 'instrument', 'format', 'slot', 'status', 'admin_reply']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('bookings', values, editing.id); setEditing(null); }} />}{loading ? <p className="admin-empty">Loading bookings...</p> : bookings.length === 0 ? <p className="admin-empty">No bookings found.</p> : <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Customer</span><span>Session</span><span>Status</span><span>Actions</span></div>{bookings.map((booking) => <div className="admin-table-row" key={booking.id}><span><b>{booking.name}</b><small>{booking.email}</small></span><span>{booking.instrument || '—'} · {booking.format || '—'}<small>{booking.slot || 'No slot selected'}</small></span><span className="booking-badge">{booking.status || 'new'}</span><span className="admin-row-actions"><button title="Edit booking" onClick={() => setEditing(booking)}><Pencil size={15} /></button><button title="Delete booking" onClick={() => void remove('bookings', booking.id, 'Booking deleted.')}><Trash2 size={15} /></button><a title="Reply by email" href={`mailto:${booking.email}?subject=TFS booking enquiry&body=${encodeURIComponent(booking.admin_reply || 'Thank you for contacting The Fretboard Society.')}`}><Reply size={15} /></a></span></div>)}</div>}</section>;
 
 const Students = ({ students, search, setSearch, editing, setEditing, save, remove }: { students: RecordValue[]; search: string; setSearch: (value: string) => void; editing: RecordValue | null; setEditing: (value: RecordValue | null) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => <section className="admin-panel"><div className="admin-panel-heading"><div><p className="admin-kicker">Portal accounts</p><h2>Student profiles</h2></div><label className="admin-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name or email" /></label></div>{editing && <RecordForm title={editing.id ? 'Edit student profile' : 'Add student profile'} values={editing} fields={['first_name', 'last_name', 'email', 'phone_number', 'curriculum', 'class_schedule', 'status']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('student_profiles', { ...values, status: values.status || 'active' }, editing.id); setEditing(null); }} />}{!editing && <button className="admin-save" onClick={() => setEditing({ first_name: '', last_name: '', email: '', phone_number: '', curriculum: 'Guitar', class_schedule: '', status: 'active' })}><Plus size={17} /> Add student profile</button>}<div className="admin-table"><div className="admin-table-row admin-table-head"><span>Student</span><span>Curriculum</span><span>Joined</span><span>Actions</span></div>{students.map((student) => <div className="admin-table-row" key={student.id}><span><b>{`${student.first_name || ''} ${student.last_name || ''}`.trim() || 'Student'}</b><small>{student.email || 'No email'}</small></span><span>{student.curriculum || 'Guitar'}<small>{student.class_schedule || 'Active Student'}</small></span><span>{student.created_at ? new Date(student.created_at).toLocaleDateString() : '—'}</span><span className="admin-row-actions"><button title="Edit student" onClick={() => setEditing(student)}><Pencil size={15} /></button><button title="Remove student profile" onClick={() => void remove('student_profiles', student.id, 'Student profile removed.')}><Trash2 size={15} /></button></span></div>)}</div></section>;
-
-const ContentEditor = ({ content, editing, setEditing, save }: { content: RecordValue[]; editing: RecordValue; setEditing: (value: RecordValue) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void> }) => <section className="admin-panel"><PanelHeading eyebrow="Central content registry" title="Edit website pages" /><div className="admin-content-list">{content.map((page) => <button className="admin-content-item" key={page.id} onClick={() => setEditing({ ...page, ...(page.content || {}) })}><b>{page.page_key}</b><small>{page.content?.headline || 'No headline set'}</small><Pencil size={15} /></button>)}{content.length === 0 && <p className="admin-empty">No page records yet. Create the first page entry below.</p>}</div><RecordForm title={editing.id ? `Editing ${editing.page_key}` : 'Create page content'} values={editing} fields={['page_key', 'headline', 'subline', 'body']} lockedFields={editing.id ? ['page_key'] : []} onSave={async (values) => { const contentValues = { headline: values.headline || '', subline: values.subline || '', body: values.body || '' }; await save('site_content', { page_key: values.page_key, content: contentValues, updated_by: values.updated_by }, editing.id); }} onCancel={() => setEditing(emptyContent)} /> </section>;
 
 const DiscountManager = ({ discounts, editing, setEditing, save, remove }: { discounts: RecordValue[]; editing: RecordValue | null; setEditing: (value: RecordValue | null) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => <section className="admin-panel"><PanelHeading eyebrow="Applied at student checkout" title="Discount coupons" />{editing ? <RecordForm title={editing.id ? 'Edit coupon' : 'New coupon'} values={editing} fields={['name', 'coupon_code', 'discount_type', 'discount_value', 'maximum_discount_amount', 'minimum_purchase', 'valid_from', 'valid_until', 'coupon_count', 'active']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('discounts', {
       ...values,
@@ -293,8 +318,10 @@ const DiscountManager = ({ discounts, editing, setEditing, save, remove }: { dis
       valid_until: values.valid_until || null,
       active: values.active !== false,
     }, editing.id); setEditing(null); }} /> : <button className="admin-save" onClick={() => setEditing({ name: '', coupon_code: '', discount_type: 'percentage', discount_value: 10, maximum_discount_amount: 500, minimum_purchase: 0, valid_from: new Date().toISOString().slice(0, 10), valid_until: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), coupon_count: 10, active: true })}><Plus size={17} /> Create coupon</button>}<div className="admin-table">{discounts.map((discount) => <div className="admin-table-row" key={discount.id}><span><b>{discount.name}</b><small>{discount.coupon_code}</small><small>{discount.discount_type === 'amount' ? `₹${Number(discount.discount_value || 0).toLocaleString('en-IN')} off` : `${Number(discount.discount_value || 0)}% off`}</small></span><span>{discount.valid_until ? `Valid till ${new Date(discount.valid_until).toLocaleDateString('en-IN')}` : 'Open date'}<small>{discount.minimum_purchase ? `Min ₹${Number(discount.minimum_purchase).toLocaleString('en-IN')}` : 'No minimum'}</small></span><span>{discount.active ? 'Active' : 'Paused'}<small>{discount.coupon_count ? `${discount.coupon_count} coupon(s)` : 'Unlimited'}</small></span><span className="admin-row-actions"><button onClick={() => setEditing(discount)}><Pencil size={15} /></button><button onClick={() => void remove('discounts', discount.id, 'Coupon deleted.')}><Trash2 size={15} /></button></span></div>)}</div></section>;
+
 const FeeManager = ({ fees, editing, setEditing, save, remove }: { fees: RecordValue[]; editing: RecordValue | null; setEditing: (value: RecordValue | null) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => <section className="admin-panel"><PanelHeading eyebrow="Student checkout plans" title="Fee plans" />{editing ? <RecordForm title={editing.id ? 'Edit fee plan' : 'New fee plan'} values={editing} fields={['name', 'amount', 'description', 'category', 'instrument', 'billing_period', 'sort_order', 'active']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('fee_plans', { ...values, amount: Number(values.amount), sort_order: Number(values.sort_order || 0), active: values.active !== false }, editing.id); setEditing(null); }} /> : <button className="admin-save" onClick={() => setEditing({ name: '', amount: 900, description: '', category: 'guitar', instrument: 'guitar', billing_period: 'monthly', sort_order: fees.length, active: true })}><Plus size={17} /> Add fee plan</button>}<div className="admin-table">{fees.map((fee) => <div className="admin-table-row" key={fee.id}><span><b>{fee.name}</b><small>{fee.billing_period} · {fee.instrument || fee.category || 'guitar'}</small></span><span>₹{fee.amount}</span><span>{fee.active ? 'Active' : 'Paused'}</span><span className="admin-row-actions"><button onClick={() => setEditing(fee)}><Pencil size={15} /></button><button onClick={() => void remove('fee_plans', fee.id, 'Fee plan deleted.')}><Trash2 size={15} /></button></span></div>)}</div></section>;
-const CatalogManager = ({ title, table, items, fields, save, remove }: { title: string; table: string; items: RecordValue[]; fields: string[]; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => { const [editing, setEditing] = useState<RecordValue | null>(null); return <section className="admin-panel"><PanelHeading eyebrow="Public website data" title={title} />{editing ? <RecordForm title={editing.id ? `Edit ${title.toLowerCase()}` : `New ${title.toLowerCase()}`} values={editing} fields={fields} onCancel={() => setEditing(null)} onSave={async (values) => { await save(table, values, editing.id); setEditing(null); }} /> : <button className="admin-save" onClick={() => setEditing({ active: true, sort_order: items.length })}><Plus size={17} /> Add entry</button>}<div className="admin-table">{items.map((item) => <div className="admin-table-row" key={item.id}><span><b>{item.title}</b><small>{item.description || item.day_label || item.category}</small></span><span>{item.time_label || item.format || item.category}</span><span>{item.active ? 'Active' : 'Paused'}</span><span className="admin-row-actions"><button onClick={() => setEditing(item)}><Pencil size={15} /></button><button onClick={() => void remove(table, item.id, 'Entry deleted.')}><Trash2 size={15} /></button></span></div>)}</div></section>; };
+
+const CatalogManager = ({ title, table, items, fields, save, remove }: { title: string; table: string; items: RecordValue[]; fields: string[]; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => { const [editing, setEditing] = useState<RecordValue | null>(null); return <section className="admin-panel"><PanelHeading eyebrow="Public website data" title={title} />{editing ? <RecordForm title={editing.id ? `Edit ${title.toLowerCase()}` : `New ${title.toLowerCase()}`} values={editing} fields={fields} onCancel={() => setEditing(null)} onSave={async (values) => { const numericFields = ['amount', 'sort_order']; const cleaned: RecordValue = { ...values }; for (const field of numericFields) { if (cleaned[field] !== undefined && cleaned[field] !== '') cleaned[field] = Number(cleaned[field]); } if ('active' in cleaned) cleaned.active = cleaned.active !== false; await save(table, cleaned, editing.id); setEditing(null); }} /> : <button className="admin-save" onClick={() => setEditing({ active: true, sort_order: items.length })}><Plus size={17} /> Add entry</button>}<div className="admin-table">{items.map((item) => { const itemTitle = item.title || item.name || 'Untitled'; const secondary = item.description || item.day_label || item.category || ''; const meta = item.time_label || item.format || (item.amount !== undefined ? `₹${Number(item.amount).toLocaleString('en-IN')}` : item.category) || ''; return <div className="admin-table-row" key={item.id}><span><b>{itemTitle}</b><small>{secondary}</small></span><span>{meta}</span><span>{item.active ? 'Active' : 'Paused'}</span><span className="admin-row-actions"><button onClick={() => setEditing(item)}><Pencil size={15} /></button><button onClick={() => void remove(table, item.id, 'Entry deleted.')}><Trash2 size={15} /></button></span></div>; })}</div></section>; };
 
 const MessageManager = ({ requests, save, remove }: { requests: RecordValue[]; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => { const [editing, setEditing] = useState<RecordValue | null>(null); return <section className="admin-panel"><PanelHeading eyebrow="Student portal requests" title="Student messages" />{editing && <RecordForm title={`Review student message${editing.student_name ? ` · ${editing.student_name}` : ''}`} values={editing} fields={['student_name', 'student_email', 'request_type', 'message', 'status', 'admin_note']} lockedFields={['student_name', 'student_email', 'request_type', 'message']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('student_requests', values, editing.id); setEditing(null); }} />}{requests.length === 0 ? <p className="admin-empty">No student messages yet.</p> : <div className="admin-table">{requests.map((request) => <div className="admin-table-row" key={request.id}><span><b>{request.student_name || 'Student'}</b><small>{request.request_type} · {request.message}</small></span><span>{request.status || 'pending'}</span><span>{request.created_at ? new Date(request.created_at).toLocaleDateString() : '—'}</span><span className="admin-row-actions"><button title="Reply/update" onClick={() => setEditing(request)}><Reply size={15} /></button><button title="Delete message" onClick={() => void remove('student_requests', request.id, 'Message deleted.')}><Trash2 size={15} /></button></span></div>)}</div>}</section>; };
 

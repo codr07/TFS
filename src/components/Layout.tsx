@@ -14,6 +14,12 @@ gsap.registerPlugin(ScrollTrigger);
 const Layout = () => {
   const location = useLocation();
   const outlet = useOutlet();
+  const normalizedPath = location.pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  const isStandalonePaymentRoute = 
+    normalizedPath === '/admissionform' || 
+    normalizedPath === '/feepayment' ||
+    normalizedPath.startsWith('/admissionform/') ||
+    normalizedPath.startsWith('/feepayment/');
 
   useEffect(() => {
     const wrapper = document.querySelector('.mac-window-wrapper') as HTMLElement;
@@ -112,20 +118,20 @@ const Layout = () => {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: -20 }}
               transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-              style={{ flex: 1, paddingBottom: '10vh', transformOrigin: 'center bottom' }}
+              style={{ flex: 1, paddingBottom: isStandalonePaymentRoute ? 0 : '10vh', transformOrigin: 'center bottom' }}
             >
               {outlet}
             </motion.main>
 
           </AnimatePresence>
-          <Footer />
+          {!isStandalonePaymentRoute && <Footer />}
         </div>
       </div>
       
       {/* Global Components */}
       
       {/* The bottom App Drawer */}
-      <Navbar />
+      {!isStandalonePaymentRoute && <Navbar />}
     </div>
   );
 };

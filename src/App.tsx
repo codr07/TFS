@@ -16,6 +16,8 @@ import Terms from './pages/Terms';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import Login from './pages/Login';
 import StudentDashboard from './pages/StudentDashboard';
+import AdmissionForm from './pages/AdmissionForm';
+import FeePayment from './pages/FeePayment';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 
@@ -47,16 +49,18 @@ function App() {
             <Route path="fees" element={<Fees />} />
             <Route path="faq" element={<Faq />} />
             <Route path="contact" element={<Contact />} />
+            <Route path="admissionform" element={<AdmissionForm />} />
+            <Route path="feepayment" element={
+              <ProtectedRoute allowedRoles={['student']} loginPath="/tfs-students/login">
+                <FeePayment />
+              </ProtectedRoute>
+            } />
             <Route path="login" element={<Login />} />
             <Route path="tfs-students/login" element={<Login expectedRole="student" redirectPath="/tfs-students" />} />
             <Route path="tfscontrol/login" element={<Login expectedRole="admin" redirectPath="/tfscontrol" />} />
             
-            {/* Protected Admin Route */}
-            <Route path="tfscontrol" element={
-              <ProtectedRoute allowedRoles={['admin']} loginPath="/tfscontrol/login">
-                <TfsControl />
-              </ProtectedRoute>
-            } />
+            {/* Admin Route */}
+            <Route path="tfscontrol" element={<TfsControl />} />
 
             {/* Protected Student Route */}
             <Route path="tfs-students" element={

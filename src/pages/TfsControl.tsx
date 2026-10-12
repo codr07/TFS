@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseAdmin } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { BookOpen, Calendar, Check, CircleDollarSign, FileText, Guitar, LayoutDashboard, LogOut, MessageSquare, Percent, Pencil, Plus, Puzzle, Reply, Search, Trash2, Users, X } from 'lucide-react';
 
-type Section = 'overview' | 'content' | 'bookings' | 'messages' | 'discounts' | 'fees' | 'addons' | 'schedule' | 'curriculum' | 'students';
+type Section = 'overview' | 'admissions' | 'content' | 'bookings' | 'messages' | 'discounts' | 'fees' | 'addons' | 'schedule' | 'curriculum' | 'students';
 type RecordValue = Record<string, any>;
+type AdmissionFeed = { headers: string[]; rows: string[][]; spreadsheetUrl?: string };
 const navItems: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: 'overview', label: 'Dashboard', icon: LayoutDashboard }, { id: 'content', label: 'Page content', icon: FileText }, { id: 'bookings', label: 'Bookings', icon: Calendar }, { id: 'messages', label: 'Student messages', icon: MessageSquare }, { id: 'discounts', label: 'Coupons', icon: Percent }, { id: 'fees', label: 'Fee plans', icon: CircleDollarSign }, { id: 'addons', label: 'Add-ons', icon: Puzzle }, { id: 'schedule', label: 'Schedule', icon: Calendar }, { id: 'curriculum', label: 'Curriculum', icon: BookOpen }, { id: 'students', label: 'Students', icon: Users },
+  { id: 'overview', label: 'Dashboard', icon: LayoutDashboard }, { id: 'admissions', label: 'Admissions', icon: FileText }, { id: 'content', label: 'Page content', icon: FileText }, { id: 'bookings', label: 'Bookings', icon: Calendar }, { id: 'messages', label: 'Student messages', icon: MessageSquare }, { id: 'discounts', label: 'Coupons', icon: Percent }, { id: 'fees', label: 'Fee plans', icon: CircleDollarSign }, { id: 'addons', label: 'Add-ons', icon: Puzzle }, { id: 'schedule', label: 'Schedule', icon: Calendar }, { id: 'curriculum', label: 'Curriculum', icon: BookOpen }, { id: 'students', label: 'Students', icon: Users },
 ];
 
 const emptyContent = { page_key: 'home', headline: '', subline: '', body: '' };
@@ -23,6 +24,7 @@ const TfsControl = () => {
   const [curriculumItems, setCurriculumItems] = useState<RecordValue[]>([]);
   const [addons, setAddons] = useState<RecordValue[]>([]);
   const [requests, setRequests] = useState<RecordValue[]>([]);
+  const [admissionFeed, setAdmissionFeed] = useState<AdmissionFeed>({ headers: [], rows: [] });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
@@ -35,22 +37,147 @@ const TfsControl = () => {
 
   const notify = (message: string) => { setNotice(message); setError(''); window.setTimeout(() => setNotice(''), 3000); };
   const fail = (message: string) => { setError(message); setNotice(''); };
+  const loadAdmissions = async () => {
+    const apiUrl = import.meta.env.VITE_ADMISSION_API_URL as string | undefined;
+    if (!apiUrl) return;
+    const callbackName = `tfsAdmissionsCallback_${Date.now()}`;
+    const result = await new Promise<AdmissionFeed & { success?: boolean; error?: string }>((resolve, reject) => {
+      const script = document.createElement('script');
+      const callbackWindow = globalThis as unknown as Record<string, (response: AdmissionFeed & { success?: boolean; error?: string }) => void>;
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        reject(new Error('Unable to load admission submissions. Check the Apps Script deployment.'));
+      }, 15000);
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        delete callbackWindow[callbackName];
+        script.remove();
+      };
+      callbackWindow[callbackName] = (response: AdmissionFeed & { success?: boolean; error?: string }) => {
+        cleanup();
+        resolve(response);
+      };
+      script.onerror = () => {
+        cleanup();
+        reject(new Error('Unable to connect to the admission database.'));
+      };
+      script.src = `${apiUrl}?action=admissions&callback=${encodeURIComponent(callbackName)}&t=${Date.now()}`;
+      document.head.appendChild(script);
+    });
+    if (!result.success) throw new Error(result.error || 'Admission database returned an error.');
+    setAdmissionFeed({ headers: result.headers || [], rows: result.rows || [], spreadsheetUrl: result.spreadsheetUrl });
+  };
   const loadData = async () => {
     setLoading(true);
-    const [bookingResult, studentResult, contentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult] = await Promise.all([
-      supabase.from('bookings').select('*').order('created_at', { ascending: false }),
-      supabase.from('student_profiles').select('*').order('created_at', { ascending: false }),
-      supabase.from('site_content').select('*').order('page_key'),
-      supabase.from('discounts').select('*').order('updated_at', { ascending: false }),
-      supabase.from('fee_plans').select('*').order('updated_at', { ascending: false }),
-      supabase.from('schedule_items').select('*').order('sort_order'),
-      supabase.from('curriculum_items').select('*').order('sort_order'),
-      supabase.from('add_ons').select('*').order('sort_order'),
-      supabase.from('student_requests').select('*').order('created_at', { ascending: false }),
+    const db = supabaseAdmin;
+    const [bookingResult, studentResult, roleStudentResult, contentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult] = await Promise.all([
+      db.from('bookings').select('*').order('created_at', { ascending: false }),
+      db.from('student_profiles').select('*').order('created_at', { ascending: false }),
+      db.from('profiles').select('*').eq('role', 'student').order('created_at', { ascending: false }),
+      db.from('site_content').select('*').order('page_key'),
+      db.from('discounts').select('*').order('updated_at', { ascending: false }),
+      db.from('fee_plans').select('*').order('updated_at', { ascending: false }),
+      db.from('schedule_items').select('*').order('sort_order'),
+      db.from('curriculum_items').select('*').order('sort_order'),
+      db.from('add_ons').select('*').order('sort_order'),
+      db.from('student_requests').select('*').order('created_at', { ascending: false }),
     ]);
-    const firstError = [bookingResult, studentResult, contentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult].find((result) => result.error)?.error;
-    if (firstError) fail(firstError.message);
-    setBookings(bookingResult.data || []); setStudents(studentResult.data || []); setContent(contentResult.data || []); setDiscounts(discountResult.data || []); setFees(feeResult.data || []); setScheduleItems(scheduleResult.data || []); setCurriculumItems(curriculumResult.data || []); setAddons(addonResult.data || []); setRequests(requestResult.data || []); setLoading(false);
+    const firstError = [bookingResult, studentResult, roleStudentResult, contentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult].find((result) => result.error)?.error;
+    if (firstError) console.warn('Supabase query warning:', firstError.message);
+
+    let authStudentUsers: RecordValue[] = [];
+    try {
+      const { data: usersData } = await db.auth.admin.listUsers();
+      if (usersData?.users) {
+        authStudentUsers = usersData.users.filter((u: any) => 
+          u.app_metadata?.role === 'student' || 
+          u.user_metadata?.role === 'student' ||
+          u.role === 'student'
+        ).map((u: any) => ({
+          id: u.id,
+          email: u.email,
+          role: 'student',
+          first_name: u.user_metadata?.first_name || u.user_metadata?.full_name?.split(' ')[0] || u.email?.split('@')[0] || 'Student',
+          last_name: u.user_metadata?.last_name || u.user_metadata?.full_name?.split(' ').slice(1).join(' ') || '',
+          created_at: u.created_at,
+        }));
+      }
+    } catch {
+      // Ignored if auth admin is unavailable
+    }
+
+    const rawProfiles = studentResult.data || [];
+    const roleStudents = roleStudentResult.data || [];
+    const studentMap = new Map<string, RecordValue>();
+
+    // 1. student_profiles
+    for (const sp of rawProfiles) {
+      studentMap.set(sp.id, {
+        ...sp,
+        first_name: sp.first_name || 'Student',
+        last_name: sp.last_name || '',
+        status: sp.status || 'active',
+        curriculum: sp.curriculum || 'Guitar',
+      });
+    }
+
+    // 2. profiles where role is student
+    for (const p of roleStudents) {
+      const existing = studentMap.get(p.id) || Array.from(studentMap.values()).find(s => s.email && p.email && s.email.toLowerCase() === p.email.toLowerCase());
+      if (existing) {
+        if (!existing.email && p.email) existing.email = p.email;
+        if (!existing.first_name && (p.first_name || p.display_name || p.full_name)) {
+          existing.first_name = p.first_name || p.full_name?.split(' ')[0] || p.display_name || 'Student';
+        }
+      } else {
+        const nameParts = (p.full_name || p.display_name || 'Student').trim().split(' ');
+        studentMap.set(p.id, {
+          id: p.id,
+          first_name: p.first_name || nameParts[0] || 'Student',
+          last_name: p.last_name || nameParts.slice(1).join(' ') || '',
+          email: p.email || '',
+          curriculum: p.curriculum || 'Guitar',
+          class_schedule: p.class_schedule || 'Active Student',
+          status: p.status || 'active',
+          created_at: p.created_at,
+          role: 'student',
+        });
+      }
+    }
+
+    // 3. auth users with role student
+    for (const au of authStudentUsers) {
+      const existing = studentMap.get(au.id) || Array.from(studentMap.values()).find(s => s.email && au.email && s.email.toLowerCase() === au.email.toLowerCase());
+      if (existing) {
+        if (!existing.email && au.email) existing.email = au.email;
+      } else {
+        studentMap.set(au.id, {
+          id: au.id,
+          first_name: au.first_name,
+          last_name: au.last_name,
+          email: au.email,
+          curriculum: 'Guitar',
+          class_schedule: 'Active Student',
+          status: 'active',
+          created_at: au.created_at,
+          role: 'student',
+        });
+      }
+    }
+
+    const mergedStudents = Array.from(studentMap.values());
+
+    setBookings(bookingResult.data || []); 
+    setStudents(mergedStudents); 
+    setContent(contentResult.data || []); 
+    setDiscounts(discountResult.data || []); 
+    setFees(feeResult.data || []); 
+    setScheduleItems(scheduleResult.data || []); 
+    setCurriculumItems(curriculumResult.data || []); 
+    setAddons(addonResult.data || []); 
+    setRequests(requestResult.data || []); 
+    setLoading(false);
+    try { await loadAdmissions(); } catch (admissionError) { fail(admissionError instanceof Error ? admissionError.message : 'Unable to load admissions.'); }
   };
   useEffect(() => { void loadData(); }, []);
 
@@ -60,17 +187,57 @@ const TfsControl = () => {
   }, [search, students]);
   const remove = async (table: string, id: string, refreshMessage: string) => {
     if (!window.confirm('Delete this record permanently?')) return;
-    const { error: deleteError } = await supabase.from(table).delete().eq('id', id);
-    if (deleteError) fail(deleteError.message); else { notify(refreshMessage); void loadData(); }
+    const { error: deleteError } = await supabaseAdmin.from(table).delete().eq('id', id);
+    if (deleteError) {
+      const { error: fallbackError } = await supabase.from(table).delete().eq('id', id);
+      if (fallbackError) { fail(deleteError.message); return; }
+    }
+    if (table === 'student_profiles') {
+      try {
+        await supabaseAdmin.from('profiles').delete().eq('id', id);
+      } catch {
+        // ignore profile cleanup error
+      }
+    }
+    notify(refreshMessage); 
+    void loadData();
   };
   const saveRecord = async (table: string, values: RecordValue, id?: string) => {
-    const payload = { ...values }; delete payload.id; delete payload.created_at; delete payload.updated_at;
-    const result = id ? await supabase.from(table).update(payload).eq('id', id) : await supabase.from(table).insert(payload);
-    if (result.error) fail(result.error.message); else { notify('Saved successfully.'); void loadData(); }
+    const payload = { ...values }; 
+    delete payload.id; 
+    delete payload.created_at; 
+    delete payload.updated_at;
+    delete payload.role;
+    delete payload._roleOnly;
+
+    const result = id ? await supabaseAdmin.from(table).update(payload).eq('id', id) : await supabaseAdmin.from(table).insert(payload);
+    if (result.error) {
+      const fallbackResult = id ? await supabase.from(table).update(payload).eq('id', id) : await supabase.from(table).insert(payload);
+      if (fallbackResult.error) { fail(result.error.message); return; }
+    }
+
+    if (table === 'student_profiles') {
+      const profileSync: RecordValue = {
+        role: 'student',
+        display_name: `${values.first_name || ''} ${values.last_name || ''}`.trim() || 'Student',
+      };
+      if (values.email) profileSync.email = values.email;
+      if (id) {
+        try {
+          await supabaseAdmin.from('profiles').update(profileSync).eq('id', id);
+        } catch {
+          // ignore profile sync error
+        }
+      }
+    }
+
+    notify('Saved successfully.'); 
+    void loadData();
   };
 
   return <div className="admin-shell animate-fade-in"><aside className="admin-sidebar"><div className="admin-brand"><Guitar size={22} /><span>TFS <b>CONTROL</b></span></div><p className="admin-kicker">Administration</p><nav className="admin-nav">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={section === id ? 'admin-nav-item active' : 'admin-nav-item'} onClick={() => setSection(id)}><Icon size={18} />{label}</button>)}</nav><button className="admin-signout" onClick={signOut}><LogOut size={17} /> Sign out</button></aside><main className="admin-main"><header className="admin-header"><div><p className="admin-kicker">TFS / {section}</p><h1>{navItems.find((item) => item.id === section)?.label}</h1></div><div className="admin-status"><span /> Secure admin workspace</div></header>{notice && <div className="admin-notice"><Check size={16} />{notice}</div>}{error && <div className="admin-error"><X size={16} />{error}</div>}
     {section === 'overview' && <Overview bookings={bookings} students={students} fees={fees} onNavigate={setSection} loading={loading} />}
+    {section === 'admissions' && <Admissions feed={admissionFeed} onRefresh={() => void loadAdmissions()} />}
     {section === 'bookings' && <Bookings bookings={bookings} loading={loading} editing={editingBooking} setEditing={setEditingBooking} save={saveRecord} remove={remove} />}
     {section === 'messages' && <MessageManager requests={requests} save={saveRecord} remove={remove} />}
     {section === 'students' && <Students students={filteredStudents} search={search} setSearch={setSearch} editing={editingStudent} setEditing={setEditingStudent} save={saveRecord} remove={remove} />}
@@ -83,13 +250,35 @@ const TfsControl = () => {
   </main></div>;
 };
 
+const Admissions = ({ feed, onRefresh }: { feed: AdmissionFeed; onRefresh: () => void }) => {
+  const exportAdmissions = () => {
+    const csv = [feed.headers, ...feed.rows].map((row) => row.map((value) => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n');
+    const url = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `tfs-admissions-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  return <section className="admin-panel">
+    <PanelHeading eyebrow="Google Sheets admission database" title="Admission submissions" />
+    <div className="admin-admission-toolbar">
+      <span>{feed.rows.length} submission{feed.rows.length === 1 ? '' : 's'}</span>
+      <button className="admin-save" onClick={onRefresh}>Refresh</button>
+      <button className="admin-save" onClick={exportAdmissions} disabled={!feed.rows.length}>Export spreadsheet CSV</button>
+      {feed.spreadsheetUrl && <a className="admin-save" href={feed.spreadsheetUrl} target="_blank" rel="noreferrer">Open Google Sheet</a>}
+    </div>
+    {!feed.rows.length ? <p className="admin-empty">No admission submissions found. Deploy the latest Apps Script and submit the form once.</p> : <div className="admin-admission-table"><table><thead><tr>{feed.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{feed.rows.map((row, rowIndex) => <tr key={`${row[1] || 'admission'}-${rowIndex}`}>{feed.headers.map((header, columnIndex) => <td key={`${header}-${columnIndex}`}>{row[columnIndex] || '—'}</td>)}</tr>)}</tbody></table></div>}
+  </section>;
+};
+
 const Overview = ({ bookings, students, fees, onNavigate, loading }: { bookings: RecordValue[]; students: RecordValue[]; fees: RecordValue[]; onNavigate: (section: Section) => void; loading: boolean }) => <><section className="admin-stat-grid"><Stat label="New bookings" value={bookings.filter((booking) => booking.status === 'new').length} icon={Calendar} /><Stat label="Active students" value={students.length} icon={Users} /><Stat label="Fee plans" value={fees.length} icon={CircleDollarSign} /></section><div className="admin-grid-two"><section className="admin-panel"><PanelHeading eyebrow="Latest enquiries" title="Booking inbox" action="Manage bookings" onClick={() => onNavigate('bookings')} />{loading ? <p className="admin-empty">Loading records...</p> : bookings.length === 0 ? <p className="admin-empty">No bookings yet.</p> : bookings.slice(0, 5).map((booking) => <div className="booking-row" key={booking.id}><div className="booking-avatar">{(booking.name || 'S').charAt(0).toUpperCase()}</div><div className="booking-person"><b>{booking.name}</b><small>{booking.email} · {booking.instrument || 'Instrument pending'}</small></div><span className="booking-badge">{booking.status || 'new'}</span></div>)}</section><section className="admin-panel"><PanelHeading eyebrow="Workspace shortcuts" title="Manage TFS" /><button className="admin-action" onClick={() => onNavigate('content')}><FileText size={18} /> Edit page content</button><button className="admin-action" onClick={() => onNavigate('discounts')}><Percent size={18} /> Create discount coupon</button><button className="admin-action" onClick={() => onNavigate('students')}><Users size={18} /> Review student profiles</button></section></div></>;
 const Stat = ({ label, value, icon: Icon }: { label: string; value: number; icon: typeof Calendar }) => <div className="admin-stat"><Icon size={20} color="var(--gold)" /><span>{label}</span><strong>{value}</strong></div>;
 const PanelHeading = ({ eyebrow, title, action, onClick }: { eyebrow: string; title: string; action?: string; onClick?: () => void }) => <div className="admin-panel-heading"><div><p className="admin-kicker">{eyebrow}</p><h2>{title}</h2></div>{action && <button className="admin-link" onClick={onClick}>{action}</button>}</div>;
 
 const Bookings = ({ bookings, loading, editing, setEditing, save, remove }: { bookings: RecordValue[]; loading: boolean; editing: RecordValue | null; setEditing: (value: RecordValue | null) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => <section className="admin-panel"><PanelHeading eyebrow="Enquiries from your website" title="Booking management" />{editing && <RecordForm title="Update booking" values={editing} fields={['name', 'email', 'phone', 'instrument', 'format', 'slot', 'status', 'admin_reply']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('bookings', values, editing.id); setEditing(null); }} />}{loading ? <p className="admin-empty">Loading bookings...</p> : bookings.length === 0 ? <p className="admin-empty">No bookings found.</p> : <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Customer</span><span>Session</span><span>Status</span><span>Actions</span></div>{bookings.map((booking) => <div className="admin-table-row" key={booking.id}><span><b>{booking.name}</b><small>{booking.email}</small></span><span>{booking.instrument || '—'} · {booking.format || '—'}<small>{booking.slot || 'No slot selected'}</small></span><span className="booking-badge">{booking.status || 'new'}</span><span className="admin-row-actions"><button title="Edit booking" onClick={() => setEditing(booking)}><Pencil size={15} /></button><button title="Delete booking" onClick={() => void remove('bookings', booking.id, 'Booking deleted.')}><Trash2 size={15} /></button><a title="Reply by email" href={`mailto:${booking.email}?subject=TFS booking enquiry&body=${encodeURIComponent(booking.admin_reply || 'Thank you for contacting The Fretboard Society.')}`}><Reply size={15} /></a></span></div>)}</div>}</section>;
 
-const Students = ({ students, search, setSearch, editing, setEditing, save, remove }: { students: RecordValue[]; search: string; setSearch: (value: string) => void; editing: RecordValue | null; setEditing: (value: RecordValue | null) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => <section className="admin-panel"><div className="admin-panel-heading"><div><p className="admin-kicker">Portal accounts</p><h2>Student profiles</h2></div><label className="admin-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name or email" /></label></div>{editing && <RecordForm title={editing.id ? 'Edit student profile' : 'Add student profile'} values={editing} fields={['first_name', 'last_name', 'email', 'phone_number', 'curriculum', 'class_schedule', 'status']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('student_profiles', { ...values, status: values.status || 'active' }, editing.id); setEditing(null); }} />}{!editing && <button className="admin-save" onClick={() => setEditing({ first_name: '', last_name: '', email: '', phone_number: '', curriculum: 'Guitar', class_schedule: '', status: 'active' })}><Plus size={17} /> Add student profile</button>}<div className="admin-table"><div className="admin-table-row admin-table-head"><span>Student</span><span>Curriculum</span><span>Joined</span><span>Actions</span></div>{students.map((student) => <div className="admin-table-row" key={student.id}><span><b>{`${student.first_name || ''} ${student.last_name || ''}`.trim() || 'Student'}</b><small>{student.email || 'No email'}</small></span><span>{student.curriculum || 'Guitar'}<small>{student.class_schedule || 'No schedule'}</small></span><span>{student.created_at ? new Date(student.created_at).toLocaleDateString() : '—'}</span><span className="admin-row-actions"><button title="Edit student" onClick={() => setEditing(student)}><Pencil size={15} /></button><button title="Remove student profile" onClick={() => void remove('student_profiles', student.id, 'Student profile removed.')}><Trash2 size={15} /></button></span></div>)}</div></section>;
+const Students = ({ students, search, setSearch, editing, setEditing, save, remove }: { students: RecordValue[]; search: string; setSearch: (value: string) => void; editing: RecordValue | null; setEditing: (value: RecordValue | null) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => <section className="admin-panel"><div className="admin-panel-heading"><div><p className="admin-kicker">Portal accounts</p><h2>Student profiles</h2></div><label className="admin-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name or email" /></label></div>{editing && <RecordForm title={editing.id ? 'Edit student profile' : 'Add student profile'} values={editing} fields={['first_name', 'last_name', 'email', 'phone_number', 'curriculum', 'class_schedule', 'status']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('student_profiles', { ...values, status: values.status || 'active' }, editing.id); setEditing(null); }} />}{!editing && <button className="admin-save" onClick={() => setEditing({ first_name: '', last_name: '', email: '', phone_number: '', curriculum: 'Guitar', class_schedule: '', status: 'active' })}><Plus size={17} /> Add student profile</button>}<div className="admin-table"><div className="admin-table-row admin-table-head"><span>Student</span><span>Curriculum</span><span>Joined</span><span>Actions</span></div>{students.map((student) => <div className="admin-table-row" key={student.id}><span><b>{`${student.first_name || ''} ${student.last_name || ''}`.trim() || 'Student'}</b><small>{student.email || 'No email'}</small></span><span>{student.curriculum || 'Guitar'}<small>{student.class_schedule || 'Active Student'}</small></span><span>{student.created_at ? new Date(student.created_at).toLocaleDateString() : '—'}</span><span className="admin-row-actions"><button title="Edit student" onClick={() => setEditing(student)}><Pencil size={15} /></button><button title="Remove student profile" onClick={() => void remove('student_profiles', student.id, 'Student profile removed.')}><Trash2 size={15} /></button></span></div>)}</div></section>;
 
 const ContentEditor = ({ content, editing, setEditing, save }: { content: RecordValue[]; editing: RecordValue; setEditing: (value: RecordValue) => void; save: (table: string, values: RecordValue, id?: string) => Promise<void> }) => <section className="admin-panel"><PanelHeading eyebrow="Central content registry" title="Edit website pages" /><div className="admin-content-list">{content.map((page) => <button className="admin-content-item" key={page.id} onClick={() => setEditing({ ...page, ...(page.content || {}) })}><b>{page.page_key}</b><small>{page.content?.headline || 'No headline set'}</small><Pencil size={15} /></button>)}{content.length === 0 && <p className="admin-empty">No page records yet. Create the first page entry below.</p>}</div><RecordForm title={editing.id ? `Editing ${editing.page_key}` : 'Create page content'} values={editing} fields={['page_key', 'headline', 'subline', 'body']} lockedFields={editing.id ? ['page_key'] : []} onSave={async (values) => { const contentValues = { headline: values.headline || '', subline: values.subline || '', body: values.body || '' }; await save('site_content', { page_key: values.page_key, content: contentValues, updated_by: values.updated_by }, editing.id); }} onCancel={() => setEditing(emptyContent)} /> </section>;
 

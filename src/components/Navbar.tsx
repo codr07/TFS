@@ -5,16 +5,28 @@ import { Home, Info, Guitar, BookOpen, Calendar, DollarSign, HelpCircle, Mail, G
 
 const Navbar = () => {
   const location = useLocation();
+  const normalizedPath = location.pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  const isStandalone = 
+    normalizedPath === '/admissionform' || 
+    normalizedPath === '/feepayment' ||
+    normalizedPath.startsWith('/admissionform/') ||
+    normalizedPath.startsWith('/feepayment/');
+
   const [isMobile, setIsMobile] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   
   useEffect(() => {
+    if (isStandalone) return;
     // Only use iOS dock for actual mobile phones (<= 600px)
     const handleResize = () => setIsMobile(window.innerWidth <= 600);
     handleResize(); // Init
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  }, [isStandalone]);
+
+  if (isStandalone) {
+    return null;
+  }
 
   const navLinks = [
     { name: 'Home', path: '/', icon: <Home size={24} /> },

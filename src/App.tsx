@@ -20,6 +20,7 @@ import AdmissionForm from './pages/AdmissionForm';
 import FeePayment from './pages/FeePayment';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import SeoManager from './components/SeoManager';
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -34,6 +35,7 @@ function App() {
 
   return (
     <>
+      <SeoManager />
       <AnimatePresence>
         {loading && <Preloader key="preloader" />}
       </AnimatePresence>
@@ -50,11 +52,7 @@ function App() {
             <Route path="faq" element={<Faq />} />
             <Route path="contact" element={<Contact />} />
             <Route path="admissionform" element={<AdmissionForm />} />
-            <Route path="feepayment" element={
-              <ProtectedRoute allowedRoles={['student']} loginPath="/tfs-students/login">
-                <FeePayment />
-              </ProtectedRoute>
-            } />
+            <Route path="feepayment" element={<FeePayment />} />
             <Route path="login" element={<Login />} />
             <Route path="tfs-students/login" element={<Login expectedRole="student" redirectPath="/tfs-students" />} />
             <Route path="tfscontrol/login" element={<Login expectedRole="admin" redirectPath="/tfscontrol" />} />

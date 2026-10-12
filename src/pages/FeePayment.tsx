@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { jsPDF } from 'jspdf';
+import { AlertCircle, Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -42,9 +43,17 @@ const FeePayment = () => {
   const [submitting, setSubmitting] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [receiptError, setReceiptError] = useState('');
-  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
   const [studentProfile, setStudentProfile] = useState<{ curriculum: string; class_schedule: string | null } | null>(null);
+
+  // Login modal states
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
   const paymentReference = useMemo(() => `TFSFEE${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`, [startedAt]);
   const classFee = data.curriculum === 'Ukulele (Dotara)' ? 1500 :
     data.classType.startsWith('Home Visit') ? CLASS_FEES['Home Visit'] :
@@ -56,16 +65,24 @@ const FeePayment = () => {
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&margin=12&data=${encodeURIComponent(upiUri)}`;
 
   useEffect(() => {
-    if (authLoading || !user?.email) return;
+    if (authLoading) return;
+    if (!user?.email) {
+      setProfileLoading(false);
+      setStudentProfile(null);
+      return;
+    }
+
     let active = true;
     const loadProfile = async () => {
       setProfileLoading(true);
+      setProfileError('');
       const { data: profile, error: profileQueryError } = await supabase
         .from('student_profiles')
         .select('first_name,last_name,email,phone_number,curriculum,class_schedule,status')
         .eq('email', user.email)
         .eq('status', 'active')
         .maybeSingle();
+
       if (!active) return;
       if (profileQueryError) {
         setProfileError(profileQueryError.message);
@@ -90,6 +107,7 @@ const FeePayment = () => {
       }
       setProfileLoading(false);
     };
+
     void loadProfile();
     return () => { active = false; };
   }, [authLoading, user]);
@@ -108,6 +126,30 @@ const FeePayment = () => {
   const choices = data.curriculum === 'Ukulele (Dotara)'
     ? ['Home Visit — ₹1,500/month']
     : ['Home Visit — ₹1,500/month', 'Home Tuition — ₹1,300/month', 'Online — ₹900/month'];
+
+  const handleLoginSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setLoginLoading(true);
+    setLoginError('');
+
+    try {
+      const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+        email: loginEmail.trim(),
+        password: loginPassword,
+      });
+
+      if (authErr) throw authErr;
+      if (!authData.user) {
+        throw new Error('Authentication failed. Please check your credentials.');
+      }
+
+      setLoginPassword('');
+    } catch (err: any) {
+      setLoginError(err.message || 'Failed to authenticate');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
 
   const downloadReceipt = async () => {
     setReceiptError('');
@@ -161,16 +203,327 @@ const FeePayment = () => {
     } finally { setSubmitting(false); }
   };
 
-  if (authLoading || profileLoading) return <div className="admission-page"><div className="admission-card admission-loading"><div className="admission-brand"><img src="/images/logo_t.png" alt="TFS — The Fretboard Society" /><h1>Loading student account</h1><p>Checking your TFS profile…</p></div></div></div>;
-  if (profileError || !studentProfile) return <div className="admission-page"><div className="admission-card"><div className="admission-brand"><img src="/images/logo_t.png" alt="TFS — The Fretboard Society" /><h1>Payment access unavailable</h1><p>{profileError || 'No active student profile was found.'}</p><button type="button" className="admission-primary" onClick={() => void signOut()}>Sign out</button></div></div></div>;
+  // Auth Loading Screen
+  if (authLoading) {
+    return (
+      <div className="admission-page">
+        <div className="admission-card admission-loading">
+          <div className="admission-brand">
+            <img src="/images/logo_t.png" alt="TFS — The Fretboard Society" />
+            <h1>Loading session</h1>
+            <p>Checking student authentication…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  return <div className="admission-page"><div className="admission-card"><div className="admission-brand"><img src="/images/logo_t.png" alt="TFS — The Fretboard Society" /><p className="admission-eyebrow">THE FRETBOARD SOCIETY</p><h1>Monthly Fee Payment</h1><p>SECURE UPI PAYMENT</p><small className="admission-account-badge">Signed in as {data.email}</small></div><div className="admission-progress"><span style={{ width: `${(step / 2) * 100}%` }} /></div>
-    {!completed ? <form onSubmit={submit}>
-      {step === 1 && <section className="admission-step"><h2>01 — Choose Payment</h2><div className="admission-account-panel"><span>Verified student account</span><strong>{data.name}</strong><small>{data.email}</small></div><div className="admission-fields"><label>Student Name<input readOnly value={data.name} /></label><label>Phone / WhatsApp<input readOnly value={data.phone} /></label><label>Email<input readOnly type="email" value={data.email} /></label></div><div className="admission-plan-heading"><h3>{data.curriculum}</h3><small>Plan from your student profile</small></div>{data.curriculum && <div className="admission-choices">{choices.map((choice) => <label className={`admission-choice ${data.classType === choice ? 'selected' : ''}`} key={choice}><input type="radio" required name="classType" checked={data.classType === choice} onChange={() => update('classType', choice)} /><span>{choice}</span></label>)}</div>}<div className="admission-choices">{ADDONS.map((addon) => { const selected = data.addons.includes(addon); return <label className={`admission-choice ${selected ? 'selected' : ''}`} key={addon}><input type="checkbox" checked={selected} onChange={() => update('addons', selected ? data.addons.filter((item) => item !== addon) : [...data.addons, addon])} /><span>{addon}</span></label>; })}</div><div className="admission-fee-summary"><span>Monthly fee with selected add-ons</span><strong>₹{amount.toLocaleString('en-IN')}</strong></div><div className="admission-actions"><span /><button type="button" className="admission-primary" disabled={!data.classType} onClick={() => { setStartedAt(Date.now()); setRemaining(300); setStep(2); }}>Continue to Payment →</button></div></section>}
-      {step === 2 && <section className="admission-step"><h2>02 — Pay {amount.toLocaleString('en-IN')} Total</h2><div className="admission-payment"><div><div className="admission-amount">₹{amount.toLocaleString('en-IN')}</div><b>UPI: codr@slc</b><p className="admission-note">This QR is for your selected monthly fee and add-ons. It is valid for 5 minutes.</p><div className="admission-status">Time remaining <strong className={remaining === 0 ? 'expired' : ''}>{String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')}</strong></div><code>{paymentReference}</code></div><div className="admission-qr">{remaining ? <img src={qrUrl} alt={`UPI payment QR code for Rs. ${amount}`} /> : <b>QR EXPIRED</b>}</div></div><label>UPI Transaction ID / UTR *<input required minLength={6} value={data.utr} onChange={(event) => update('utr', event.target.value)} /></label><label>Name used for UPI payment *<input required value={data.payerName} onChange={(event) => update('payerName', event.target.value)} /></label><div className="admission-actions"><button type="button" className="admission-secondary" onClick={() => setStep(1)}>← Back</button><button type="submit" className="admission-primary" disabled={submitting}>{submitting ? 'Submitting…' : 'Submit Payment'}</button></div></section>}
-      {error && <p className="admission-error" role="alert">{error}</p>}
-    </form> : <section className="admission-success"><h2>Payment Submitted</h2><p>Your monthly fee payment has been submitted for verification.</p><p><b>Payment reference:</b> {paymentReference}</p><p><b>Amount:</b> Rs. {amount.toLocaleString('en-IN')}</p><div className="admission-success-actions"><button type="button" className="admission-primary" onClick={() => void downloadReceipt()}>Download payment receipt</button><Link className="admission-secondary" to="/">Return to TFS</Link></div>{receiptError && <p className="admission-error">{receiptError}</p>}</section>}
-  </div></div>;
+  // Not Logged In: Show Login Modal First (Without Route Redirection)
+  if (!user) {
+    return (
+      <div className="admission-page">
+        <div className="fee-login-modal-overlay">
+          <div className="fee-login-modal-card">
+            <div className="fee-login-modal-header">
+              <img src="/images/logo_t.png" alt="TFS — The Fretboard Society" className="fee-login-logo" />
+              <span className="fee-login-badge">STUDENT PORTAL</span>
+              <p className="fee-login-eyebrow">THE FRETBOARD SOCIETY</p>
+              <h2>Student Login</h2>
+              <p className="fee-login-sub">Please sign in with your student credentials to open your fee payment form.</p>
+            </div>
+
+            {loginError && (
+              <div className="fee-login-error" role="alert">
+                <AlertCircle size={18} />
+                <span>{loginError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleLoginSubmit} className="fee-login-form">
+              <div className="fee-login-field">
+                <label>Student Email Address</label>
+                <div className="fee-login-input-wrap">
+                  <Mail size={18} className="fee-login-icon" />
+                  <input
+                    type="email"
+                    required
+                    placeholder="student@example.com"
+                    value={loginEmail}
+                    onChange={(e) => {
+                      setLoginEmail(e.target.value);
+                      setLoginError('');
+                    }}
+                    autoComplete="email"
+                  />
+                </div>
+              </div>
+
+              <div className="fee-login-field">
+                <label>Password</label>
+                <div className="fee-login-input-wrap">
+                  <Lock size={18} className="fee-login-icon" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    placeholder="••••••••"
+                    value={loginPassword}
+                    onChange={(e) => {
+                      setLoginPassword(e.target.value);
+                      setLoginError('');
+                    }}
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    className="fee-login-pwd-toggle"
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="admission-primary fee-login-submit"
+                disabled={loginLoading}
+              >
+                {loginLoading ? 'Verifying Student Account…' : 'Sign In & Open Fee Payment →'}
+              </button>
+            </form>
+
+            <div className="fee-login-footer">
+              <Link to="/" className="fee-login-back-link">
+                ← Return to TFS Home
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Profile Loading Screen
+  if (profileLoading) {
+    return (
+      <div className="admission-page">
+        <div className="admission-card admission-loading">
+          <div className="admission-brand">
+            <img src="/images/logo_t.png" alt="TFS — The Fretboard Society" />
+            <h1>Loading student account</h1>
+            <p>Fetching your TFS student profile…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Profile Error / Inactive Account Screen
+  if (profileError || !studentProfile) {
+    return (
+      <div className="admission-page">
+        <div className="admission-card">
+          <div className="admission-brand">
+            <img src="/images/logo_t.png" alt="TFS — The Fretboard Society" />
+            <h1>Payment access unavailable</h1>
+            <p>{profileError || 'No active student profile was found.'}</p>
+            <div style={{ marginTop: '1.75rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button type="button" className="admission-primary" onClick={() => void signOut()}>
+                Sign in with another account
+              </button>
+              <Link to="/" className="admission-secondary">
+                Return to TFS Home
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Active Student: Fee Payment Form
+  return (
+    <div className="admission-page">
+      <div className="admission-card">
+        <div className="admission-brand">
+          <img src="/images/logo_t.png" alt="TFS — The Fretboard Society" />
+          <p className="admission-eyebrow">THE FRETBOARD SOCIETY</p>
+          <h1>Monthly Fee Payment</h1>
+          <p>SECURE UPI PAYMENT</p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', marginTop: '0.6rem' }}>
+            <small className="admission-account-badge" style={{ marginTop: 0 }}>Signed in as {data.email}</small>
+            <button
+              type="button"
+              onClick={() => void signOut()}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--gold)',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                padding: 0
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+
+        <div className="admission-progress">
+          <span style={{ width: `${(step / 2) * 100}%` }} />
+        </div>
+
+        {!completed ? (
+          <form onSubmit={submit}>
+            {step === 1 && (
+              <section className="admission-step">
+                <h2>01 — Choose Payment</h2>
+                <div className="admission-account-panel">
+                  <span>Verified student account</span>
+                  <strong>{data.name}</strong>
+                  <small>{data.email}</small>
+                </div>
+
+                <div className="admission-fields">
+                  <label>
+                    Student Name
+                    <input readOnly value={data.name} />
+                  </label>
+                  <label>
+                    Phone / WhatsApp
+                    <input readOnly value={data.phone} />
+                  </label>
+                  <label>
+                    Email
+                    <input readOnly type="email" value={data.email} />
+                  </label>
+                </div>
+
+                <div className="admission-plan-heading">
+                  <h3>{data.curriculum}</h3>
+                  <small>Plan from your student profile</small>
+                </div>
+
+                {data.curriculum && (
+                  <div className="admission-choices">
+                    {choices.map((choice) => (
+                      <label className={`admission-choice ${data.classType === choice ? 'selected' : ''}`} key={choice}>
+                        <input
+                          type="radio"
+                          required
+                          name="classType"
+                          checked={data.classType === choice}
+                          onChange={() => update('classType', choice)}
+                        />
+                        <span>{choice}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                <div className="admission-choices">
+                  {ADDONS.map((addon) => {
+                    const selected = data.addons.includes(addon);
+                    return (
+                      <label className={`admission-choice ${selected ? 'selected' : ''}`} key={addon}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => update('addons', selected ? data.addons.filter((item) => item !== addon) : [...data.addons, addon])}
+                        />
+                        <span>{addon}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="admission-fee-summary">
+                  <span>Monthly fee with selected add-ons</span>
+                  <strong>₹{amount.toLocaleString('en-IN')}</strong>
+                </div>
+
+                <div className="admission-actions">
+                  <span />
+                  <button
+                    type="button"
+                    className="admission-primary"
+                    disabled={!data.classType}
+                    onClick={() => {
+                      setStartedAt(Date.now());
+                      setRemaining(300);
+                      setStep(2);
+                    }}
+                  >
+                    Continue to Payment →
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {step === 2 && (
+              <section className="admission-step">
+                <h2>02 — Pay {amount.toLocaleString('en-IN')} Total</h2>
+                <div className="admission-payment">
+                  <div>
+                    <div className="admission-amount">₹{amount.toLocaleString('en-IN')}</div>
+                    <b>UPI: codr@slc</b>
+                    <p className="admission-note">This QR is for your selected monthly fee and add-ons. It is valid for 5 minutes.</p>
+                    <div className="admission-status">
+                      Time remaining <strong className={remaining === 0 ? 'expired' : ''}>
+                        {String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')}
+                      </strong>
+                    </div>
+                    <code>{paymentReference}</code>
+                  </div>
+                  <div className="admission-qr">
+                    {remaining ? <img src={qrUrl} alt={`UPI payment QR code for Rs. ${amount}`} /> : <b>QR EXPIRED</b>}
+                  </div>
+                </div>
+
+                <label>
+                  UPI Transaction ID / UTR *
+                  <input required minLength={6} value={data.utr} onChange={(event) => update('utr', event.target.value)} />
+                </label>
+                <label>
+                  Name used for UPI payment *
+                  <input required value={data.payerName} onChange={(event) => update('payerName', event.target.value)} />
+                </label>
+
+                <div className="admission-actions">
+                  <button type="button" className="admission-secondary" onClick={() => setStep(1)}>
+                    ← Back
+                  </button>
+                  <button type="submit" className="admission-primary" disabled={submitting}>
+                    {submitting ? 'Submitting…' : 'Submit Payment'}
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {error && <p className="admission-error" role="alert">{error}</p>}
+          </form>
+        ) : (
+          <section className="admission-success">
+            <h2>Payment Submitted</h2>
+            <p>Your monthly fee payment has been submitted for verification.</p>
+            <p><b>Payment reference:</b> {paymentReference}</p>
+            <p><b>Amount:</b> Rs. {amount.toLocaleString('en-IN')}</p>
+            <div className="admission-success-actions">
+              <button type="button" className="admission-primary" onClick={() => void downloadReceipt()}>
+                Download payment receipt
+              </button>
+              <Link className="admission-secondary" to="/">
+                Return to TFS
+              </Link>
+            </div>
+            {receiptError && <p className="admission-error">{receiptError}</p>}
+          </section>
+        )}
+      </div>
+    </div>
+  );
 };
 
 export default FeePayment;

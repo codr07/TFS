@@ -905,3 +905,188 @@ select option {
   background-color: var(--bg-desktop);
   color: var(--text-primary);
 }
+
+/* Fee Payment Login Modal */
+.fee-login-modal-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 70vh;
+  padding: 1rem;
+}
+
+.fee-login-modal-card {
+  width: min(480px, 100%);
+  padding: clamp(1.5rem, 5vw, 2.5rem);
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 20px;
+  background: rgba(10, 10, 12, 0.94);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7), 0 0 35px rgba(212, 175, 55, 0.12);
+  animation: modalFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.fee-login-modal-header {
+  text-align: center;
+  margin-bottom: 1.75rem;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.15);
+  padding-bottom: 1.25rem;
+}
+
+.fee-login-logo {
+  width: 80px;
+  height: auto;
+  margin: 0 auto 0.75rem;
+  display: block;
+}
+
+.fee-login-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  color: var(--gold);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 99px;
+  background: rgba(212, 175, 55, 0.08);
+  margin-bottom: 0.5rem;
+}
+
+.fee-login-eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.2em;
+  color: var(--text-secondary);
+}
+
+.fee-login-modal-header h2 {
+  font-size: 1.6rem;
+  color: #fff;
+  margin: 0 0 0.5rem;
+}
+
+.fee-login-sub {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.45;
+}
+
+.fee-login-error {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid rgba(255, 94, 86, 0.4);
+  border-radius: 10px;
+  background: rgba(255, 94, 86, 0.1);
+  color: #ff9d96;
+  font-size: 0.85rem;
+}
+
+.fee-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+.fee-login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.fee-login-field label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.fee-login-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.fee-login-icon {
+  position: absolute;
+  left: 0.95rem;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.fee-login-input-wrap input {
+  width: 100%;
+  padding: 0.85rem 2.6rem 0.85rem 2.6rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.fee-login-input-wrap input:focus {
+  border-color: var(--gold);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.fee-login-pwd-toggle {
+  position: absolute;
+  right: 0.85rem;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fee-login-pwd-toggle:hover {
+  color: var(--gold);
+}
+
+.fee-login-submit {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.95rem 1.25rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.03em;
+}
+
+.fee-login-footer {
+  text-align: center;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fee-login-back-link {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.fee-login-back-link:hover {
+  color: var(--gold);
+}
+

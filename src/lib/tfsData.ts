@@ -857,8 +857,15 @@ export async function fetchSpreadsheetAdmissions(): Promise<{ headers: string[];
 
     const cleanup = () => {
       window.clearTimeout(timeout);
-      delete callbackWindow[callbackName];
-      script.remove();
+      // Give a 15-second grace period before deleting callback so delayed network responses don't throw Uncaught ReferenceError
+      window.setTimeout(() => {
+        try {
+          delete callbackWindow[callbackName];
+        } catch {}
+      }, 15000);
+      try {
+        script.remove();
+      } catch {}
     };
 
     callbackWindow[callbackName] = (resp: any) => {

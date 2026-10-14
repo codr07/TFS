@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDollarSign,
+  Bot,
   Clock3,
   Copy,
   Download,
@@ -46,8 +47,17 @@ import {
   recordStudentPayment,
   updateStudentSelfProfile,
 } from '../lib/tfsData';
+import { generateStudentIdCardPdf, generateFeeReceiptPdf } from '../lib/pdfGenerator';
+import { askTfsAi } from '../lib/tfsAi';
 
-type StudentTab = 'home' | 'idcard' | 'profile' | 'payments' | 'modules' | 'requests';
+type StudentTab = 'home' | 'idcard' | 'profile' | 'payments' | 'modules' | 'requests' | 'ai';
+
+interface AiMessage {
+  id: string;
+  sender: 'user' | 'assistant';
+  text: string;
+  timestamp: string;
+}
 
 export const StudentDashboard = () => {
   const { user, signOut } = useAuth();
@@ -386,6 +396,7 @@ export const StudentDashboard = () => {
     { id: 'payments', label: 'Tuition & Fees', icon: CircleDollarSign },
     { id: 'modules', label: 'Curriculum & Schedule', icon: CalendarDays },
     { id: 'requests', label: 'Helpdesk & Requests', icon: MessageSquare },
+    { id: 'ai', label: 'AI Music Tutor', icon: Bot },
   ];
 
   return (
@@ -565,6 +576,14 @@ export const StudentDashboard = () => {
         )}
 
         {/* 6. HELPDESK & REQUESTS TAB */}
+        {/* 7. AI MUSIC TUTOR TAB */}
+        {tab === 'ai' && (
+          <AiChatTab
+            student={student}
+            displayName={displayName}
+          />
+        )}
+
         {tab === 'requests' && user && (
           <RequestsTab
             user={user}
@@ -1029,8 +1048,17 @@ const StudentIdCardTab = ({
           <button className="admission-secondary" onClick={onOpenEditModal}>
             <Edit3 size={16} /> Edit Pass Details
           </button>
-          <button className="admin-save" onClick={handleDownloadCard} disabled={downloading}>
+          <button className="admin-save" onClick={handleDownloadCard} disabled={downloading} style={{ margin: 0 }}>
             <Download size={16} /> {downloading ? 'Generating...' : 'Download Card (PNG)'}
+          </button>
+          <button
+            className="admin-save"
+            style={{ margin: 0, background: 'rgba(212,175,55,0.15)', border: '1px solid var(--gold)', color: 'var(--gold)' }}
+            onClick={async () => {
+              await generateStudentIdCardPdf(student, displayName, studentIdBadge, dynamicFeeSummary);
+            }}
+          >
+            <Download size={16} /> Download PDF
           </button>
         </div>
       </div>
@@ -1695,8 +1723,12 @@ const TuitionPaymentsTab = ({
                   <small style={{ color: 'var(--text-secondary)' }}>
                     UTR: {p.utr} • Ref: {p.payment_reference || p.id.slice(0, 8)}
                   </small>
+                  <br />
+                  <small style={{ color: 'var(--text-secondary)' }}>
+                    {p.curriculum} • {p.class_type}
+                  </small>
                 </div>
-                <div style={{ textAlign: 'right' }}>
+                <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.4rem' }}>
                   <b style={{ color: 'var(--gold)', fontSize: '1.1rem', display: 'block' }}>
                     ₹{p.amount.toLocaleString('en-IN')}
                   </b>
@@ -1704,7 +1736,6 @@ const TuitionPaymentsTab = ({
                     className="booking-badge"
                     style={{
                       display: 'inline-block',
-                      marginTop: '0.2rem',
                       background:
                         p.payment_status === 'VERIFIED'
                           ? 'rgba(40,167,69,0.2)'
@@ -1721,6 +1752,26 @@ const TuitionPaymentsTab = ({
                   >
                     {p.payment_status}
                   </span>
+                  {p.payment_status === 'VERIFIED' && (
+                    <button
+                      type="button"
+                      onClick={() => generateFeeReceiptPdf(p)}
+                      style={{
+                        background: 'rgba(212,175,55,0.1)',
+                        border: '1px solid rgba(212,175,55,0.35)',
+                        borderRadius: '6px',
+                        color: 'var(--gold)',
+                        padding: '0.25rem 0.6rem',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.3rem',
+                      }}
+                    >
+                      <Download size={12} /> Receipt PDF
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -1730,6 +1781,7 @@ const TuitionPaymentsTab = ({
     </div>
   );
 };
+
 
 // =========================================================================
 // 5. CURRICULUM & MODULES TAB
@@ -2404,3 +2456,190 @@ const EditIdCardModal = ({
 };
 
 export default StudentDashboard;
+
+// =========================================================================
+// 7. AI MUSIC TUTOR CHAT TAB
+// =========================================================================
+const AiChatTab = ({
+  student,
+  displayName,
+}: {
+  student: any;
+  displayName: string;
+}) => {
+  const [messages, setMessages] = useState<AiMessage[]>([{
+    id: 'welcome',
+    sender: 'assistant',
+    text: `🎸 Greetings ${displayName}! I am your **TFS AI Music Tutor** — your intelligent guide for music theory, chord shapes, fretboard navigation, transposition, and academy queries.\n\nTry asking me:\n• "Explain the pentatonic scale"
+• "What are barre chord tips?"
+• "How do I transpose C to G?"
+• "What is fingerstyle PIMA technique?"`,
+    timestamp: new Date().toISOString(),
+  }]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSend = async (e: FormEvent) => {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || loading) return;
+
+    const userMsg: AiMessage = {
+      id: `u-${Date.now()}`,
+      sender: 'user',
+      text,
+      timestamp: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const reply = await askTfsAi(text, {
+        curriculum: student?.curriculum || 'Guitar',
+        plan: student?.class_schedule || 'Tuition Plan',
+        studentName: displayName,
+      });
+      const aiMsg: AiMessage = {
+        id: `a-${Date.now()}`,
+        sender: 'assistant',
+        text: reply,
+        timestamp: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, aiMsg]);
+    } catch {
+      setMessages((prev) => [...prev, {
+        id: `err-${Date.now()}`,
+        sender: 'assistant',
+        text: '⚠️ I encountered an error. Please try again.',
+        timestamp: new Date().toISOString(),
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: '760px', margin: '0 auto', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 200px)', minHeight: '500px' }}>
+      <div style={{ marginBottom: '1.25rem' }}>
+        <p className="student-kicker">Powered by Gemini AI</p>
+        <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', margin: 0 }}>
+          <Bot size={28} style={{ color: 'var(--gold)' }} />
+          TFS AI Music Tutor
+        </h2>
+        <p className="student-muted" style={{ marginTop: '0.35rem' }}>Your personal guide for music theory, guitar & ukulele techniques, and academy guidance.</p>
+      </div>
+
+      {/* Chat Messages */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1rem',
+          padding: '1.25rem',
+          background: 'rgba(255,255,255,0.02)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          borderRadius: '12px',
+          marginBottom: '1rem',
+        }}
+      >
+        {messages.map((msg) => (
+          <div
+            key={msg.id}
+            style={{
+              display: 'flex',
+              justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+              gap: '0.75rem',
+            }}
+          >
+            {msg.sender === 'assistant' && (
+              <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(212,175,55,0.15)', border: '1px solid var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '4px' }}>
+                <Bot size={18} style={{ color: 'var(--gold)' }} />
+              </div>
+            )}
+            <div
+              style={{
+                maxWidth: '80%',
+                padding: '0.85rem 1.1rem',
+                borderRadius: msg.sender === 'user' ? '16px 16px 4px 16px' : '4px 16px 16px 16px',
+                background: msg.sender === 'user'
+                  ? 'rgba(212,175,55,0.15)'
+                  : 'rgba(255,255,255,0.04)',
+                border: msg.sender === 'user'
+                  ? '1px solid rgba(212,175,55,0.35)'
+                  : '1px solid rgba(255,255,255,0.08)',
+                fontSize: '0.9rem',
+                lineHeight: '1.6',
+                color: '#fff',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {msg.text}
+            </div>
+            {msg.sender === 'user' && (
+              <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '4px' }}>
+                <UserRound size={18} style={{ color: 'var(--text-secondary)' }} />
+              </div>
+            )}
+          </div>
+        ))}
+        {loading && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(212,175,55,0.15)', border: '1px solid var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Bot size={18} style={{ color: 'var(--gold)' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.04)', borderRadius: '4px 16px 16px 16px', border: '1px solid rgba(255,255,255,0.08)' }}>
+              {[0,1,2].map((i) => (
+                <span key={i} style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--gold)', animation: `bounce 1.2s ${i * 0.2}s ease-in-out infinite` }} />
+              ))}
+            </div>
+          </div>
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Input */}
+      <form onSubmit={handleSend} style={{ display: 'flex', gap: '0.75rem' }}>
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ask about chords, scales, theory, fees, schedule..."
+          disabled={loading}
+          style={{
+            flex: 1,
+            padding: '0.9rem 1.1rem',
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px solid rgba(212,175,55,0.3)',
+            borderRadius: '10px',
+            color: '#fff',
+            fontSize: '0.9rem',
+            outline: 'none',
+          }}
+        />
+        <button
+          type="submit"
+          disabled={loading || !input.trim()}
+          className="admin-save"
+          style={{ margin: 0, padding: '0.9rem 1.25rem', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+        >
+          <Send size={16} /> Send
+        </button>
+      </form>
+
+      <style>{`
+        @keyframes bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-8px); opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+};

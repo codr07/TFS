@@ -9,8 +9,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export const supabaseAdmin = supabaseSecretKey
   ? createClient(supabaseUrl, supabaseSecretKey, {
       auth: {
+        storageKey: 'sb-admin-auth-token',
         persistSession: false,
         autoRefreshToken: false,
+        detectSessionInUrl: false,
       },
     })
   : supabase;

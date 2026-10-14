@@ -58,11 +58,15 @@ function App() {
             <Route path="tfscontrol/login" element={<Login expectedRole="admin" redirectPath="/tfscontrol" />} />
             
             {/* Admin Route */}
-            <Route path="tfscontrol" element={<TfsControl />} />
+            <Route path="tfscontrol" element={
+              <ProtectedRoute allowedRoles={['admin']} loginPath="/tfscontrol/login">
+                <TfsControl />
+              </ProtectedRoute>
+            } />
 
             {/* Protected Student Route */}
             <Route path="tfs-students" element={
-              <ProtectedRoute allowedRoles={['student']} loginPath="/tfs-students/login">
+              <ProtectedRoute allowedRoles={['student', 'admin']} loginPath="/tfs-students/login">
                 <StudentDashboard />
               </ProtectedRoute>
             } />

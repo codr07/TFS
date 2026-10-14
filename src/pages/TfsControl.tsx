@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabaseAdmin } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  Award,
   BookOpen,
   Calendar,
   Check,
@@ -11,6 +13,7 @@ import {
   CreditCard,
   ExternalLink,
   FileText,
+  GraduationCap,
   Guitar,
   LayoutDashboard,
   LogOut,
@@ -53,6 +56,7 @@ import {
   deleteScheduleItem,
   loadStudents,
   saveStudent,
+  saveStudentProgress,
   deleteStudent,
   loadStoredAdmissions,
   saveAdmissionLocally,
@@ -107,6 +111,7 @@ const navItems: { id: Section; label: string; icon: any }[] = [
 
 const TfsControl = () => {
   const { signOut } = useAuth();
+  const navigate = useNavigate();
   const [section, setSection] = useState<Section>('overview');
   const [students, setStudents] = useState<StudentProfile[]>([]);
   const [feePayments, setFeePayments] = useState<FeePaymentRecord[]>([]);
@@ -127,6 +132,7 @@ const TfsControl = () => {
 
   // Modals & Editing
   const [editingStudent, setEditingStudent] = useState<StudentProfile | null>(null);
+  const [studentForProgress, setStudentForProgress] = useState<StudentProfile | null>(null);
   const [isAddingStudent, setIsAddingStudent] = useState(false);
   const [studentToDelete, setStudentToDelete] = useState<{ id: string; name: string; email?: string } | null>(null);
   const [admissionToDelete, setAdmissionToDelete] = useState<{ id: string; name: string } | null>(null);
@@ -154,6 +160,31 @@ const TfsControl = () => {
     setError(msg);
     setNotice('');
     window.setTimeout(() => setError(''), 5000);
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch {}
+    navigate('/tfscontrol/login', { replace: true });
+  };
+
+  const handleSaveProgress = async (
+    studentId: string,
+    progress: Record<string, 'not_started' | 'in_progress' | 'mastered'>,
+    feedback?: string,
+    badges?: string[]
+  ) => {
+    try {
+      await saveStudentProgress(studentId, progress, feedback, badges);
+      const reloaded = await loadStudents();
+      setStudents(reloaded);
+      notify('Student syllabus progress & evaluation saved and synced!');
+      setStudentForProgress(null);
+    } catch (err) {
+      console.error('Failed to update student progress:', err);
+      fail('Failed to update student progress.');
+    }
   };
 
   const loadAllData = async () => {
@@ -473,7 +504,7 @@ const TfsControl = () => {
         >
           <Settings size={17} /> Spreadsheet Settings
         </button>
-        <button className="admin-signout" onClick={signOut}>
+        <button className="admin-signout" onClick={handleSignOut}>
           <LogOut size={17} /> Sign out
         </button>
       </aside>
@@ -548,6 +579,8 @@ const TfsControl = () => {
             setIsAdding={setIsAddingStudent}
             onSave={handleSaveStudent}
             onAskDelete={(id, name, email) => setStudentToDelete({ id, name, email })}
+            onManageProgress={setStudentForProgress}
+            curriculumItems={curriculumItems}
             feePlans={fees}
             addonsList={addons}
             scheduleList={scheduleItems}
@@ -565,6 +598,16 @@ const TfsControl = () => {
               exportToCSV(`tfs-students-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
               notify(`Exported ${students.length} students to CSV spreadsheet.`);
             }}
+          />
+        )}
+
+        {/* Student Progress Tracking & Evaluation Modal */}
+        {studentForProgress && (
+          <StudentProgressModal
+            student={studentForProgress}
+            curriculumItems={curriculumItems}
+            onClose={() => setStudentForProgress(null)}
+            onSaveProgress={handleSaveProgress}
           />
         )}
 
@@ -1095,6 +1138,8 @@ const StudentsSection = ({
   onSave,
   onAskDelete,
   onExportStudents,
+  onManageProgress,
+  curriculumItems = [],
   feePlans = [],
   addonsList = [],
   scheduleList = [],
@@ -1109,6 +1154,8 @@ const StudentsSection = ({
   onSave: (s: StudentProfile) => Promise<void>;
   onAskDelete: (id: string, name: string, email?: string) => void;
   onExportStudents: () => void;
+  onManageProgress?: (s: StudentProfile) => void;
+  curriculumItems?: CurriculumItem[];
   feePlans?: FeePlan[];
   addonsList?: AddOn[];
   scheduleList?: ScheduleItem[];
@@ -1231,6 +1278,33 @@ const StudentsSection = ({
                 {student.addons && student.addons.length > 0 && (
                   <small style={{ color: '#5dd37a' }}>+ {student.addons.join(', ')}</small>
                 )}
+
+                {/* Live Progress Bar in Admin Row */}
+                <div style={{ marginTop: '0.45rem', padding: '0.35rem 0.55rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.07)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                      <GraduationCap size={13} style={{ color: 'var(--gold)' }} /> Syllabus Progress
+                    </span>
+                    <b style={{ color: (student.overall_progress_pct || 0) >= 80 ? '#5dd37a' : 'var(--gold)' }}>
+                      {student.overall_progress_pct !== undefined ? `${student.overall_progress_pct}%` : '0%'}
+                    </b>
+                  </div>
+                  <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        width: `${student.overall_progress_pct || 0}%`,
+                        height: '100%',
+                        background: (student.overall_progress_pct || 0) >= 80 ? '#5dd37a' : 'var(--gold)',
+                        transition: 'width 0.3s ease',
+                      }}
+                    />
+                  </div>
+                  {student.instructor_feedback && (
+                    <small style={{ display: 'block', marginTop: '0.25rem', color: '#f6e7b2', fontSize: '0.68rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      Note: "{student.instructor_feedback}"
+                    </small>
+                  )}
+                </div>
               </span>
               <span>
                 <b style={{ color: 'var(--gold)' }}>
@@ -1268,6 +1342,14 @@ const StudentsSection = ({
                 </span>
               </span>
               <span className="admin-row-actions">
+                <button
+                  type="button"
+                  title="Control Syllabus Progress & Feedback"
+                  onClick={() => onManageProgress && onManageProgress(student)}
+                  style={{ color: 'var(--gold)', borderColor: 'rgba(212,175,55,0.4)', background: 'rgba(212,175,55,0.08)' }}
+                >
+                  <Award size={15} />
+                </button>
                 <button title="Edit Student Profile & Plans" onClick={() => setEditing(student)}>
                   <Pencil size={15} />
                 </button>
@@ -1285,6 +1367,354 @@ const StudentsSection = ({
         )}
       </div>
     </section>
+  );
+};
+
+// --- Student Progress & Evaluation Modal (Admin Control) ---
+const StudentProgressModal = ({
+  student,
+  curriculumItems = [],
+  onClose,
+  onSaveProgress,
+}: {
+  student: StudentProfile;
+  curriculumItems?: CurriculumItem[];
+  onClose: () => void;
+  onSaveProgress: (
+    studentId: string,
+    progress: Record<string, 'not_started' | 'in_progress' | 'mastered'>,
+    feedback?: string,
+    badges?: string[]
+  ) => Promise<void>;
+}) => {
+  const isGuitar = (student.curriculum || '').toLowerCase().includes('guitar');
+  const isUkulele = (student.curriculum || '').toLowerCase().includes('ukulele');
+
+  const defaultGuitarModules = useMemo(() => [
+    { id: 'g-mod-1', title: 'Fundamentals of Fretboard & Posture', category: 'Foundation', description: 'Hand anatomy, thumb anchoring, string names, tuning, pick grip & chromatic exercises.' },
+    { id: 'g-mod-2', title: 'Open Position Major & Minor Chords', category: 'Chords', description: 'C, G, D, Em, Am, E, A, Dm chord shapes, clean finger placement and transitions.' },
+    { id: 'g-mod-3', title: 'Strumming Dynamics & Time Signatures', category: 'Rhythm', description: 'Down/up mechanics, 4/4 and 3/4 grooves, syncopated accents, and metronome timing.' },
+    { id: 'g-mod-4', title: 'Pentatonic & Blues Scales', category: 'Scales', description: 'Minor and Major pentatonic boxes, blue notes, string bending, and vibrato fundamentals.' },
+    { id: 'g-mod-5', title: 'Barre Chords & Moveable Shapes', category: 'Chords', description: 'Root-6 (E shape) and Root-5 (A shape) major, minor, and 7th barre chords across the neck.' },
+    { id: 'g-mod-6', title: 'Fingerstyle & Hybrid Picking', category: 'Technique', description: 'Travis picking, bass-melody independence, P-I-M-A arpeggio patterns, and dynamic touch.' },
+    { id: 'g-mod-7', title: 'Major Scale Modes & Fretboard Roadmap', category: 'Theory', description: 'Ionian, Dorian, Mixolydian, Aeolian modes, interval recognition, and 3-notes-per-string patterns.' },
+    { id: 'g-mod-8', title: 'Harmonic Extensions & Chord Solos', category: 'Advanced', description: 'Dominant 7ths, Maj7, Min7, 9th chords, jazz-blues voice leading, and chord-melody arrangements.' },
+    { id: 'g-mod-9', title: 'Ear Training & Relative Pitch', category: 'Ear Training', description: 'Transcribing riffs by ear, interval recognition, chord progression identification (I-IV-V, ii-V-I).' },
+    { id: 'g-mod-10', title: 'Improvisation & Repertoire Performance', category: 'Performance', description: 'Targeting chord tones over backing tracks, phrasing, solo structure, and performance mastery.' },
+  ], []);
+
+  const defaultUkuleleModules = useMemo(() => [
+    { id: 'u-mod-1', title: 'Ukulele Anatomy, Tuning & Pitch', category: 'Foundation', description: 'G-C-E-A tuning, string numbering, ergonomic posture, and clean fretting.' },
+    { id: 'u-mod-2', title: 'Core Chords (C, G, Am, F, Em, Dm)', category: 'Chords', description: 'Open chord grips, smooth muscle memory shifts, and clear string ringing.' },
+    { id: 'u-mod-3', title: 'Island Strumming & Calypso Rhythms', category: 'Rhythm', description: 'Syncopated chunking (dampened strums), calypso pattern (D-DU-UDU), and swing feel.' },
+    { id: 'u-mod-4', title: 'Fingerpicking & Chord-Melody Solos', category: 'Technique', description: 'Thumb-index-middle finger rolls, campanella picking style, and solo arrangements.' },
+    { id: 'u-mod-5', title: 'Dotara Ukulele Techniques & Folk Stylings', category: 'Specialty', description: 'Open tuning resonance, drone strings, Bengali folk ornaments, meend and gamak inflections.' },
+    { id: 'u-mod-6', title: 'Advanced Repertoire & Stage Performance', category: 'Performance', description: 'Arranging songs, vocal accompaniment, stage dynamics, and live session readiness.' },
+  ], []);
+
+  const activeModules = useMemo(() => {
+    if (curriculumItems && curriculumItems.length > 0) {
+      const filtered = curriculumItems.filter((c) => {
+        if (isGuitar) return c.instrument === 'guitar' || !c.instrument;
+        if (isUkulele) return c.instrument?.includes('ukulele') || !c.instrument;
+        return true;
+      });
+      if (filtered.length >= 4) {
+        return filtered.map((c) => ({
+          id: c.id,
+          title: c.title,
+          category: c.category || 'Core',
+          description: c.description,
+        }));
+      }
+    }
+    return isUkulele ? defaultUkuleleModules : defaultGuitarModules;
+  }, [curriculumItems, isGuitar, isUkulele, defaultGuitarModules, defaultUkuleleModules]);
+
+  const [progress, setProgress] = useState<Record<string, 'not_started' | 'in_progress' | 'mastered'>>(() => {
+    return student.module_progress || {};
+  });
+
+  const [feedback, setFeedback] = useState(student.instructor_feedback || '');
+  const [badges, setBadges] = useState<string[]>(student.milestone_badges || []);
+  const [saving, setSaving] = useState(false);
+
+  // Compute live progress percentage
+  const total = activeModules.length;
+  const masteredCount = activeModules.filter((m) => progress[m.id] === 'mastered').length;
+  const inProgressCount = activeModules.filter((m) => progress[m.id] === 'in_progress').length;
+  const pct = total > 0 ? Math.round(((masteredCount * 1.0 + inProgressCount * 0.5) / total) * 100) : 0;
+
+  const handleSetStatus = (modId: string, status: 'not_started' | 'in_progress' | 'mastered') => {
+    setProgress((prev) => ({ ...prev, [modId]: status }));
+  };
+
+  const handleSetAll = (status: 'not_started' | 'in_progress' | 'mastered') => {
+    const updated: Record<string, 'not_started' | 'in_progress' | 'mastered'> = {};
+    activeModules.forEach((m) => {
+      updated[m.id] = status;
+    });
+    setProgress(updated);
+  };
+
+  const availableBadges = [
+    '🎸 Fretboard Navigator',
+    '🥁 Rhythm Virtuoso',
+    '🎼 Harmony Specialist',
+    '⚡ Speed & Articulation',
+    '🎓 TFS Certified',
+    '🌟 Honor Student',
+  ];
+
+  const handleToggleBadge = (b: string) => {
+    setBadges((prev) => (prev.includes(b) ? prev.filter((x) => x !== b) : [...prev, b]));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSaveProgress(student.id, progress, feedback, badges);
+    setSaving(false);
+  };
+
+  return (
+    <div className="tfs-modal-overlay">
+      <div className="tfs-modal-card">
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '1rem', marginBottom: '1.25rem' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <Award size={22} style={{ color: 'var(--gold)' }} />
+              <h2 style={{ margin: 0, fontSize: '1.4rem', color: 'var(--gold)' }}>
+                Progress &amp; Evaluation Control
+              </h2>
+            </div>
+            <p style={{ margin: '0.3rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              Student: <b style={{ color: '#fff' }}>{`${student.first_name} ${student.last_name}`.trim()}</b> ({student.email}) · Track: <b style={{ color: 'var(--gold)' }}>{student.curriculum}</b>
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.25rem' }}
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Live Mastery Banner */}
+        <div style={{ padding: '1rem 1.25rem', background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.25)', borderRadius: '12px', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <span style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 600 }}>Overall Syllabus Mastery</span>
+            <strong style={{ fontSize: '1.3rem', color: pct >= 80 ? '#5dd37a' : 'var(--gold)' }}>{pct}% Complete</strong>
+          </div>
+          <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '0.6rem' }}>
+            <div style={{ width: `${pct}%`, height: '100%', background: pct >= 80 ? '#5dd37a' : 'var(--gold)', transition: 'width 0.3s ease' }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--text-secondary)', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <span>{masteredCount} Mastered · {inProgressCount} In Progress · {total - masteredCount - inProgressCount} Not Started</span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button
+                type="button"
+                onClick={() => handleSetAll('in_progress')}
+                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--gold)', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
+              >
+                All Learning
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetAll('mastered')}
+                style={{ background: 'rgba(93,211,122,0.15)', border: '1px solid rgba(93,211,122,0.3)', color: '#5dd37a', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
+              >
+                All Mastered
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetAll('not_started')}
+                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Modules List */}
+        <div style={{ maxHeight: '42vh', overflowY: 'auto', marginBottom: '1.25rem', paddingRight: '0.25rem' }}>
+          <div style={{ display: 'grid', gap: '0.65rem' }}>
+            {activeModules.map((mod, idx) => {
+              const currentStatus = progress[mod.id] || 'not_started';
+              return (
+                <div
+                  key={mod.id}
+                  style={{
+                    padding: '0.85rem 1rem',
+                    borderRadius: '10px',
+                    background: currentStatus === 'mastered' ? 'rgba(93,211,122,0.06)' : currentStatus === 'in_progress' ? 'rgba(212,175,55,0.06)' : 'rgba(255,255,255,0.02)',
+                    border: currentStatus === 'mastered' ? '1px solid rgba(93,211,122,0.25)' : currentStatus === 'in_progress' ? '1px solid rgba(212,175,55,0.25)' : '1px solid rgba(255,255,255,0.06)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <div style={{ flex: '1 1 280px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                      <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(212,175,55,0.15)', color: 'var(--gold)', fontWeight: 600 }}>
+                        Module {idx + 1}
+                      </span>
+                      <b style={{ color: '#fff', fontSize: '0.92rem' }}>{mod.title}</b>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                      {mod.description}
+                    </p>
+                  </div>
+
+                  {/* 3-State Segmented Control */}
+                  <div style={{ display: 'inline-flex', background: 'rgba(0,0,0,0.4)', borderRadius: '8px', padding: '3px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                    <button
+                      type="button"
+                      onClick={() => handleSetStatus(mod.id, 'not_started')}
+                      style={{
+                        padding: '0.35rem 0.65rem',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        background: currentStatus === 'not_started' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                        color: currentStatus === 'not_started' ? '#fff' : 'var(--text-secondary)',
+                      }}
+                    >
+                      ○ Not Started
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetStatus(mod.id, 'in_progress')}
+                      style={{
+                        padding: '0.35rem 0.65rem',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        background: currentStatus === 'in_progress' ? 'rgba(212,175,55,0.25)' : 'transparent',
+                        color: currentStatus === 'in_progress' ? 'var(--gold)' : 'var(--text-secondary)',
+                      }}
+                    >
+                      ⏳ Learning
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetStatus(mod.id, 'mastered')}
+                      style={{
+                        padding: '0.35rem 0.65rem',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        background: currentStatus === 'mastered' ? 'rgba(93,211,122,0.25)' : 'transparent',
+                        color: currentStatus === 'mastered' ? '#5dd37a' : 'var(--text-secondary)',
+                      }}
+                    >
+                      ✓ Mastered
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Milestone Badges Awarded */}
+        <div style={{ marginBottom: '1.25rem' }}>
+          <label style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '0.5rem', fontWeight: 600 }}>
+            Award Student Milestone Badges:
+          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            {availableBadges.map((badge) => {
+              const active = badges.includes(badge);
+              return (
+                <button
+                  key={badge}
+                  type="button"
+                  onClick={() => handleToggleBadge(badge)}
+                  style={{
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: '8px',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: active ? 'rgba(212,175,55,0.2)' : 'rgba(255,255,255,0.03)',
+                    border: active ? '1px solid var(--gold)' : '1px solid rgba(255,255,255,0.1)',
+                    color: active ? 'var(--gold)' : 'var(--text-secondary)',
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {badge} {active ? '✓' : '+'}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Instructor Evaluation Notes */}
+        <div style={{ marginBottom: '1.5rem' }}>
+          <label style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '0.4rem', fontWeight: 600 }}>
+            Instructor Feedback &amp; Lesson Notes (Visible in Student Corner):
+          </label>
+          <textarea
+            rows={3}
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder="e.g. Excellent progress on barre chords! For next week, practice F#m with metronome at 72bpm..."
+            style={{
+              width: '100%',
+              padding: '0.75rem',
+              borderRadius: '8px',
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              color: '#fff',
+              font: 'inherit',
+              boxSizing: 'border-box',
+              resize: 'vertical',
+            }}
+          />
+        </div>
+
+        {/* Action Buttons */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ padding: '0.75rem 1.25rem', borderRadius: '8px', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer' }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={handleSave}
+            style={{
+              padding: '0.75rem 1.5rem',
+              borderRadius: '8px',
+              background: 'var(--gold)',
+              border: '1px solid var(--gold)',
+              color: '#000',
+              fontWeight: 700,
+              cursor: saving ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}
+          >
+            <Check size={16} />
+            {saving ? 'Syncing...' : 'Save & Sync Progress'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -1396,8 +1826,8 @@ const StudentEditModal = ({
   };
 
   return (
-    <div className="fee-login-modal-overlay">
-      <div className="fee-login-modal-card" style={{ maxWidth: '780px', textAlign: 'left', maxHeight: '90vh', overflowY: 'auto' }}>
+    <div className="tfs-modal-overlay">
+      <div className="tfs-modal-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.75rem' }}>
           <div>
             <h3 style={{ margin: 0, color: 'var(--gold)', fontSize: '1.4rem' }}>
@@ -1412,7 +1842,7 @@ const StudentEditModal = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
           {/* Section: Personal Info */}
           <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
             First Name *

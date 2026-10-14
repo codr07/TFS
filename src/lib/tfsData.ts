@@ -58,12 +58,20 @@ export interface StudentProfile {
   profession?: string;
   address?: string;
   avatar_url?: string;
+  bio?: string;
+  emergency_contact?: string;
+  emergency_phone?: string;
   status: 'active' | 'pending_verification' | 'inactive' | 'suspended';
   admission_id?: string;
   admission_fee_paid?: boolean;
   fee_status?: 'Up to date' | 'Due' | 'Overdue' | 'Pending Verification';
   fee_due_date?: string;
   notes?: string;
+  module_progress?: Record<string, 'not_started' | 'in_progress' | 'mastered'>;
+  overall_progress_pct?: number;
+  instructor_feedback?: string;
+  milestone_badges?: string[];
+  last_evaluated_at?: string;
   created_at: string;
   updated_at?: string;
 }
@@ -511,9 +519,18 @@ export async function loadStudents(): Promise<StudentProfile[]> {
                 first_name: nameParts[0] || 'Student',
                 last_name: nameParts.slice(1).join(' ') || '',
                 email: u.email,
-                phone_number: u.phone || '',
-                curriculum: 'Guitar',
-                class_schedule: 'Home Tuition — ₹1,300/month',
+                phone_number: u.phone || u.user_metadata?.phone || '',
+                curriculum: u.user_metadata?.curriculum || 'Guitar',
+                class_schedule: u.user_metadata?.class_schedule || 'Home Tuition — ₹1,300/month',
+                avatar_url: u.user_metadata?.avatar_url || '',
+                bio: u.user_metadata?.bio || '',
+                emergency_contact: u.user_metadata?.emergency_contact || '',
+                emergency_phone: u.user_metadata?.emergency_phone || '',
+                module_progress: u.user_metadata?.module_progress || {},
+                overall_progress_pct: u.user_metadata?.overall_progress_pct ?? 0,
+                instructor_feedback: u.user_metadata?.instructor_feedback || '',
+                milestone_badges: u.user_metadata?.milestone_badges || [],
+                last_evaluated_at: u.user_metadata?.last_evaluated_at || '',
                 status: 'active',
                 created_at: u.created_at || new Date().toISOString(),
               };
@@ -523,7 +540,7 @@ export async function loadStudents(): Promise<StudentProfile[]> {
                 first_name: newStudent.first_name,
                 last_name: newStudent.last_name,
                 email: newStudent.email,
-                curriculum: 'Guitar',
+                curriculum: newStudent.curriculum,
                 status: 'active',
               });
               await supabaseAdmin.from('profiles').upsert({
@@ -533,6 +550,17 @@ export async function loadStudents(): Promise<StudentProfile[]> {
                 full_name: fullName,
                 display_name: fullName,
               });
+            } else {
+              // Attach metadata to existing student
+              if (u.user_metadata?.avatar_url && !existing.avatar_url) existing.avatar_url = u.user_metadata.avatar_url;
+              if (u.user_metadata?.bio && !existing.bio) existing.bio = u.user_metadata.bio;
+              if (u.user_metadata?.emergency_contact && !existing.emergency_contact) existing.emergency_contact = u.user_metadata.emergency_contact;
+              if (u.user_metadata?.emergency_phone && !existing.emergency_phone) existing.emergency_phone = u.user_metadata.emergency_phone;
+              if (u.user_metadata?.module_progress) existing.module_progress = u.user_metadata.module_progress;
+              if (u.user_metadata?.overall_progress_pct !== undefined) existing.overall_progress_pct = u.user_metadata.overall_progress_pct;
+              if (u.user_metadata?.instructor_feedback) existing.instructor_feedback = u.user_metadata.instructor_feedback;
+              if (u.user_metadata?.milestone_badges) existing.milestone_badges = u.user_metadata.milestone_badges;
+              if (u.user_metadata?.last_evaluated_at) existing.last_evaluated_at = u.user_metadata.last_evaluated_at;
             }
           }
         }
@@ -544,13 +572,19 @@ export async function loadStudents(): Promise<StudentProfile[]> {
     console.error('Error synchronizing database students:', err);
   }
 
-  // Merge extra local metadata (like custom notes or preferred slot) if present
+  // Merge extra local metadata (like custom notes or preferred slot or progress) if present
   const cached = getStored<StudentProfile[]>('tfs_students', []);
   const cachedMap = new Map(cached.map((c) => [c.id, c]));
 
   const result = Array.from(studentMap.values()).map((s) => {
     const c = cachedMap.get(s.id);
-    if (!c) return s;
+    let localProg = s.module_progress;
+    try {
+      const stored = localStorage.getItem(`tfs_progress_${s.id}`);
+      if (stored) localProg = JSON.parse(stored);
+    } catch {}
+
+    if (!c) return { ...s, module_progress: localProg || s.module_progress };
     return {
       ...s,
       preferred_schedule: c.preferred_schedule || s.preferred_schedule,
@@ -558,11 +592,19 @@ export async function loadStudents(): Promise<StudentProfile[]> {
       monthly_fee: c.monthly_fee || s.monthly_fee,
       profession: c.profession || s.profession,
       address: c.address || s.address,
-      avatar_url: c.avatar_url || s.avatar_url,
+      avatar_url: s.avatar_url || c.avatar_url,
+      bio: s.bio || c.bio,
+      emergency_contact: s.emergency_contact || c.emergency_contact,
+      emergency_phone: s.emergency_phone || c.emergency_phone,
       admission_id: c.admission_id || s.admission_id,
       fee_status: c.fee_status || s.fee_status,
       fee_due_date: c.fee_due_date || s.fee_due_date,
       notes: c.notes || s.notes,
+      module_progress: s.module_progress && Object.keys(s.module_progress).length > 0 ? s.module_progress : (localProg || c.module_progress),
+      overall_progress_pct: s.overall_progress_pct !== undefined ? s.overall_progress_pct : c.overall_progress_pct,
+      instructor_feedback: s.instructor_feedback || c.instructor_feedback,
+      milestone_badges: s.milestone_badges || c.milestone_badges,
+      last_evaluated_at: s.last_evaluated_at || c.last_evaluated_at,
     };
   });
 
@@ -585,8 +627,8 @@ export async function saveStudent(student: Partial<StudentProfile> & { first_nam
   // 1. Verify or establish real auth user in auth.users so foreign key constraint profiles_id_fkey succeeds
   try {
     const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
-    let matchedUser = usersData?.users.find(
-      (u) =>
+    let matchedUser = usersData?.users?.find(
+      (u: any) =>
         (email && u.email?.toLowerCase() === email.toLowerCase()) ||
         (authUserId && u.id === authUserId)
     );
@@ -614,7 +656,7 @@ export async function saveStudent(student: Partial<StudentProfile> & { first_nam
       } else if (createErr) {
         // If user already exists in auth, refetch users list to find their ID
         const { data: refetched } = await supabaseAdmin.auth.admin.listUsers();
-        const found = refetched?.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
+        const found = refetched?.users?.find((u: any) => u.email?.toLowerCase() === email.toLowerCase());
         if (found) {
           authUserId = found.id;
           await supabaseAdmin.auth.admin.updateUserById(authUserId, {
@@ -646,15 +688,50 @@ export async function saveStudent(student: Partial<StudentProfile> & { first_nam
     profession: student.profession || '',
     address: student.address || '',
     avatar_url: student.avatar_url || '',
+    bio: student.bio || '',
+    emergency_contact: student.emergency_contact || '',
+    emergency_phone: student.emergency_phone || '',
     status: student.status || 'active',
     admission_id: student.admission_id || '',
     admission_fee_paid: student.admission_fee_paid !== false,
     fee_status: student.fee_status || 'Up to date',
     fee_due_date: student.fee_due_date || '',
     notes: student.notes || '',
+    module_progress: student.module_progress || {},
+    overall_progress_pct: student.overall_progress_pct ?? 0,
+    instructor_feedback: student.instructor_feedback || '',
+    milestone_badges: student.milestone_badges || [],
+    last_evaluated_at: student.last_evaluated_at || '',
     created_at: student.created_at || now,
     updated_at: now,
   };
+
+  // Sync to auth user_metadata so it persists across devices in Supabase Auth
+  if (authUserId) {
+    try {
+      const { data: uData } = await supabaseAdmin.auth.admin.getUserById(authUserId);
+      await supabaseAdmin.auth.admin.updateUserById(authUserId, {
+        user_metadata: {
+          ...(uData?.user?.user_metadata || {}),
+          full_name: fullName,
+          avatar_url: fullStudent.avatar_url,
+          bio: fullStudent.bio,
+          phone: fullStudent.phone_number,
+          emergency_contact: fullStudent.emergency_contact,
+          emergency_phone: fullStudent.emergency_phone,
+          curriculum: fullStudent.curriculum,
+          class_schedule: fullStudent.class_schedule,
+          module_progress: fullStudent.module_progress,
+          overall_progress_pct: fullStudent.overall_progress_pct,
+          instructor_feedback: fullStudent.instructor_feedback,
+          milestone_badges: fullStudent.milestone_badges,
+          last_evaluated_at: fullStudent.last_evaluated_at,
+        },
+      });
+    } catch (metaErr) {
+      console.warn('Auth user metadata sync warning:', metaErr);
+    }
+  }
 
   // 2. Sync to profiles table with student role (foreign key to auth.users)
   try {
@@ -690,6 +767,12 @@ export async function saveStudent(student: Partial<StudentProfile> & { first_nam
   }
 
   // 4. Update local cache
+  if (fullStudent.module_progress) {
+    try {
+      localStorage.setItem(`tfs_progress_${fullStudent.id}`, JSON.stringify(fullStudent.module_progress));
+    } catch {}
+  }
+
   const existingIndex = current.findIndex(
     (s) => s.id === fullStudent.id || s.email.toLowerCase() === fullStudent.email.toLowerCase()
   );
@@ -699,6 +782,67 @@ export async function saveStudent(student: Partial<StudentProfile> & { first_nam
 
   setStored('tfs_students', updated);
   return fullStudent;
+}
+
+export async function saveStudentProgress(
+  studentId: string,
+  progress: Record<string, 'not_started' | 'in_progress' | 'mastered'>,
+  feedback?: string,
+  badges?: string[]
+): Promise<void> {
+  const current = getStored<StudentProfile[]>('tfs_students', []);
+  const now = new Date().toISOString();
+
+  // Compute percentage: Mastered = 100%, In Progress = 50%
+  const total = Object.keys(progress).length;
+  let masteredCount = 0;
+  let inProgressCount = 0;
+  Object.values(progress).forEach((s) => {
+    if (s === 'mastered') masteredCount++;
+    else if (s === 'in_progress') inProgressCount++;
+  });
+  const pct = total > 0 ? Math.round(((masteredCount * 1.0 + inProgressCount * 0.5) / total) * 100) : 0;
+
+  const updated = current.map((s) => {
+    if (s.id === studentId) {
+      return {
+        ...s,
+        module_progress: progress,
+        overall_progress_pct: pct,
+        instructor_feedback: feedback !== undefined ? feedback : s.instructor_feedback,
+        milestone_badges: badges !== undefined ? badges : s.milestone_badges,
+        last_evaluated_at: now,
+        updated_at: now,
+      };
+    }
+    return s;
+  });
+
+  setStored('tfs_students', updated);
+  try {
+    localStorage.setItem(`tfs_progress_${studentId}`, JSON.stringify(progress));
+  } catch {}
+
+  // Sync to Supabase auth user_metadata
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(studentId)) {
+    try {
+      const { data: uData } = await supabaseAdmin.auth.admin.getUserById(studentId);
+      if (uData?.user) {
+        await supabaseAdmin.auth.admin.updateUserById(studentId, {
+          user_metadata: {
+            ...uData.user.user_metadata,
+            module_progress: progress,
+            overall_progress_pct: pct,
+            instructor_feedback: feedback !== undefined ? feedback : uData.user.user_metadata?.instructor_feedback,
+            milestone_badges: badges !== undefined ? badges : uData.user.user_metadata?.milestone_badges,
+            last_evaluated_at: now,
+          },
+        });
+      }
+    } catch (e) {
+      console.warn('Could not sync progress to auth user_metadata:', e);
+    }
+  }
 }
 
 export async function deleteStudent(id: string, email?: string): Promise<{ success: boolean; error?: string }> {
@@ -745,7 +889,7 @@ export async function deleteStudent(id: string, email?: string): Promise<{ succe
     if (!targetAuthId && email) {
       try {
         const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
-        const found = usersData?.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
+        const found = usersData?.users?.find((u: any) => u.email?.toLowerCase() === email.toLowerCase());
         if (found) {
           targetAuthId = found.id;
         }

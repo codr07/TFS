@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabaseAdmin } from '../lib/supabase';
@@ -100,8 +100,10 @@ export const StudentDashboard = () => {
     window.setTimeout(() => setError(''), 5500);
   };
 
+  const [currentDate] = useState(() => new Date());
+
   // Fetch full dynamic catalogs and student profile
-  const fetchStudentData = async () => {
+  const fetchStudentData = useCallback(async () => {
     if (!user) return;
     setLoading(true);
 
@@ -273,11 +275,11 @@ export const StudentDashboard = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     void fetchStudentData();
-  }, [user]);
+  }, [fetchStudentData]);
 
   // Dynamic calculations for Tuition Fees
   const dynamicFeeSummary = useMemo(() => {
@@ -338,13 +340,12 @@ export const StudentDashboard = () => {
       return { label: slotStr, countdownText: 'Weekly Session' };
     }
 
-    const today = new Date();
-    const currentDay = today.getDay();
+    const currentDay = currentDate.getDay();
     let daysUntil = (targetDayIndex - currentDay + 7) % 7;
     if (daysUntil === 0) daysUntil = 7; // next week's session if today is already passed
 
-    const nextDate = new Date();
-    nextDate.setDate(today.getDate() + daysUntil);
+    const nextDate = new Date(currentDate);
+    nextDate.setDate(currentDate.getDate() + daysUntil);
 
     const dateFormatted = nextDate.toLocaleDateString('en-IN', {
       weekday: 'short',
@@ -359,7 +360,7 @@ export const StudentDashboard = () => {
       dateFormatted,
       countdownText,
     };
-  }, [student?.preferred_schedule, scheduleList]);
+  }, [student?.preferred_schedule, scheduleList, currentDate]);
 
   // Handle syllabus progress toggle
   const handleToggleModuleProgress = (moduleId: string) => {
@@ -1445,15 +1446,10 @@ const TuitionPaymentsTab = ({
     return '';
   }, [feePlans, student]);
 
-  const [selectedPlanId, setSelectedPlanId] = useState(initialPlanId);
+  const [userSelectedPlanId, setUserSelectedPlanId] = useState<string | null>(null);
+  const selectedPlanId = userSelectedPlanId ?? initialPlanId;
   const [selectedAddonIds, setSelectedAddonIds] = useState<string[]>([]);
   const [savingPlan, setSavingPlan] = useState(false);
-
-  useEffect(() => {
-    if (initialPlanId) {
-      setSelectedPlanId(initialPlanId);
-    }
-  }, [initialPlanId]);
 
   const handleApplyCoupon = async (e: FormEvent) => {
     e.preventDefault();
@@ -1610,7 +1606,7 @@ const TuitionPaymentsTab = ({
             return (
               <div
                 key={plan.id}
-                onClick={() => setSelectedPlanId(plan.id)}
+                onClick={() => setUserSelectedPlanId(plan.id)}
                 style={{
                   padding: '1.15rem',
                   borderRadius: '10px',
@@ -1809,12 +1805,9 @@ const ModulesScheduleTab = ({
     return 'guitar';
   }, [studentTrack]);
 
-  const [filterInstrument, setFilterInstrument] = useState<string>(defaultInstrument);
+  const [selectedFilterInstrument, setSelectedFilterInstrument] = useState<string | null>(null);
+  const filterInstrument = selectedFilterInstrument ?? defaultInstrument;
   const [expandedModuleId, setExpandedModuleId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setFilterInstrument(defaultInstrument);
-  }, [defaultInstrument]);
 
   const filteredModules = useMemo(() => {
     if (filterInstrument === 'all') return curriculumList.filter((c) => c.active !== false);
@@ -1841,7 +1834,7 @@ const ModulesScheduleTab = ({
           ].map((inst) => (
             <button
               key={inst.id}
-              onClick={() => setFilterInstrument(inst.id)}
+              onClick={() => setSelectedFilterInstrument(inst.id)}
               style={{
                 padding: '0.5rem 1rem',
                 borderRadius: '8px',
@@ -2467,7 +2460,7 @@ const AiChatTab = ({
   student: any;
   displayName: string;
 }) => {
-  const [messages, setMessages] = useState<AiMessage[]>([{
+  const [messages, setMessages] = useState<AiMessage[]>(() => [{
     id: 'welcome',
     sender: 'assistant',
     text: `🎸 Greetings ${displayName}! I am your **TFS AI Music Tutor** — your intelligent guide for music theory, chord shapes, fretboard navigation, transposition, and academy queries.\n\nTry asking me:\n• "Explain the pentatonic scale"

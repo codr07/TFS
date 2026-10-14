@@ -19,8 +19,18 @@ const Login = ({ expectedRole, redirectPath }: LoginProps) => {
   const { user, role: currentRole, loading: authLoading } = useAuth();
 
   useEffect(() => {
-    if (!authLoading && user && expectedRole && currentRole === expectedRole) {
-      navigate(redirectPath || (expectedRole === 'admin' ? '/tfscontrol' : '/tfs-students'), { replace: true });
+    if (!authLoading && user) {
+      if (expectedRole === 'admin') {
+        if (currentRole === 'admin') {
+          navigate(redirectPath || '/tfscontrol', { replace: true });
+        }
+      } else if (expectedRole === 'student') {
+        if (currentRole === 'student' || currentRole === 'admin') {
+          navigate(redirectPath || '/tfs-students', { replace: true });
+        }
+      } else {
+        navigate(currentRole === 'admin' ? '/tfscontrol' : '/tfs-students', { replace: true });
+      }
     }
   }, [authLoading, currentRole, expectedRole, navigate, redirectPath, user]);
 
@@ -31,7 +41,7 @@ const Login = ({ expectedRole, redirectPath }: LoginProps) => {
 
     try {
       const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email,
+        email: email.trim(),
         password,
       });
 
@@ -42,7 +52,18 @@ const Login = ({ expectedRole, redirectPath }: LoginProps) => {
         const { data: databaseRole, error: profileError } = await supabase.rpc('current_user_role');
 
         if (profileError) console.warn('Profile role lookup unavailable; checking app metadata instead.', profileError);
-        const role = databaseRole || metadataRole;
+        let role = databaseRole || metadataRole;
+
+        if (!role) {
+          try {
+            const { data: prof } = await supabase
+              .from('profiles')
+              .select('role')
+              .eq('id', data.user.id)
+              .maybeSingle();
+            if (prof?.role) role = prof.role;
+          } catch {}
+        }
 
         if (role !== 'admin' && role !== 'student') {
           await supabase.auth.signOut();
@@ -50,8 +71,13 @@ const Login = ({ expectedRole, redirectPath }: LoginProps) => {
         }
 
         if (expectedRole && role !== expectedRole) {
-          await supabase.auth.signOut();
-          throw new Error(`This login is for ${expectedRole === 'admin' ? 'administrators' : 'students'} only.`);
+          // If expectedRole is student and user is admin, allow admin to access student portal
+          if (expectedRole === 'student' && role === 'admin') {
+            // Permitted
+          } else {
+            await supabase.auth.signOut();
+            throw new Error(`This portal is for ${expectedRole === 'admin' ? 'academy administrators' : 'enrolled students'} only.`);
+          }
         }
 
         const returnPath = (location.state as { from?: string } | null)?.from;

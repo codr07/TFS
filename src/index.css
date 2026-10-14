@@ -876,7 +876,66 @@ button[title]:hover::after, a[title]:hover::after, .admin-action:hover[title]::a
 .student-section-title { margin: 2rem 0 .75rem !important; }.payment-row { grid-template-columns: 1fr auto auto; }.payment-row em { padding: .25rem .5rem; border-radius: 999px; color: #b4f0a6; background: rgba(125,220,107,.1); font-size: .75rem; font-style: normal; }
 .update-item { align-items: flex-start; gap: 1rem; }.update-icon { display: grid; place-items: center; min-width: 38px; height: 38px; border-radius: 8px; color: var(--gold); background: rgba(212,175,55,.12); }.update-item div { display: grid; gap: .3rem; }.update-item p { margin: 0; }.update-item small { color: var(--text-secondary); }
 .request-panel { max-width: 760px; }.request-panel form { display: grid; gap: 1.25rem; margin-top: 2rem; }.request-panel select, .request-panel textarea { width: 100%; padding: .85rem 1rem; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; outline: 0; background: rgba(255,255,255,.04); color: var(--text-primary); font: inherit; }.request-panel textarea { resize: vertical; }
-@media (max-width: 800px) { .admin-shell, .student-shell { display: block; }.admin-sidebar, .student-sidebar { width: 100%; display: block; padding: 1rem; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.09); }.admin-nav, .student-nav { display: flex; overflow-x: auto; margin-top: 1rem; }.admin-nav-item, .student-nav-item { width: auto; flex: 0 0 auto; white-space: nowrap; }.admin-nav-arrow, .admin-signout, .student-signout, .admin-kicker { display: none; }.admin-main, .student-main { padding: 2rem 1rem; }.admin-grid-two, .student-grid-two, .admin-stat-grid, .student-stat-grid { grid-template-columns: 1fr; }.admin-header, .student-header { margin-bottom: 1.5rem; }.booking-row { grid-template-columns: auto minmax(0, 1fr) auto; }.booking-slot { display: none; }.admin-table-row { grid-template-columns: minmax(150px, 1fr) auto; gap: .5rem; }.admin-table-head { display: none; }.admin-table-row > span:nth-child(2), .admin-table-row > span:nth-child(3) { display: none; }.admin-row-actions { justify-content: flex-end; }.admin-record-form { grid-template-columns: 1fr; }.admin-form-heading, .admin-record-form label:nth-last-child(2), .admin-record-form .admin-save { grid-column: auto; }.student-profile { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.student-hero { display: block; }.student-plan-status { display: inline-block; margin-top: 1rem; } }
+.admin-mobile-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  color: var(--gold);
+  cursor: pointer;
+}
+.admin-mobile-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 99;
+}
+@media (max-width: 850px) {
+  .admin-mobile-toggle { display: inline-flex; }
+  .admin-shell, .student-shell { display: flex; flex-direction: column; }
+  .admin-sidebar, .student-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    background: #0a0c10;
+    border-right: 1px solid rgba(212, 175, 55, 0.3);
+    box-shadow: 10px 0 30px rgba(0,0,0,0.8);
+    display: flex;
+  }
+  .admin-sidebar.mobile-open, .student-sidebar.mobile-open {
+    transform: translateX(0);
+  }
+  .admin-main, .student-main {
+    padding: 2rem 1rem;
+    width: 100%;
+  }
+  .admin-grid-two, .student-grid-two {
+    grid-template-columns: 1fr;
+  }
+  .admin-stat-grid, .student-stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+  .admin-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .admin-table-row {
+    min-width: 650px;
+  }
+  .admin-table-head {
+    display: grid;
+  }
+}
 
 /* GSAP Utilities */
 .gsap-fade-up { opacity: 0; visibility: hidden; will-change: transform, opacity; }

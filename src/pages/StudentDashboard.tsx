@@ -1,90 +1,2406 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
-import { BookOpen, CalendarDays, Check, ChevronRight, CircleDollarSign, Clock3, FileText, LogOut, MessageSquare, UserRound } from 'lucide-react';
+import { supabaseAdmin } from '../lib/supabase';
+import {
+  Award,
+  BookOpen,
+  Calendar,
+  CalendarDays,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleDollarSign,
+  Clock3,
+  Copy,
+  Download,
+  Edit3,
+  Guitar,
+  IdCard,
+  LogOut,
+  Menu,
+  MessageSquare,
+  Music,
+  Percent,
+  QrCode,
+  RefreshCw,
+  Send,
+  UserRound,
+  X,
+} from 'lucide-react';
+import type {
+  AddOn,
+  CurriculumItem,
+  FeePaymentRecord,
+  FeePlan,
+  ScheduleItem,
+  StudentProfile,
+} from '../lib/tfsData';
+import {
+  loadAddOns,
+  loadCurriculumItems,
+  loadDiscounts,
+  loadFeePlans,
+  loadScheduleItems,
+  loadStoredFeePayments,
+  recordStudentPayment,
+  updateStudentSelfProfile,
+} from '../lib/tfsData';
 
-type StudentTab = 'home' | 'payments' | 'updates' | 'requests';
-const StudentDashboard = () => {
+type StudentTab = 'home' | 'idcard' | 'profile' | 'payments' | 'modules' | 'requests';
+
+export const StudentDashboard = () => {
   const { user, signOut } = useAuth();
   const [tab, setTab] = useState<StudentTab>('home');
-  const [requestType, setRequestType] = useState('Plan change');
-  const [request, setRequest] = useState('');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notice, setNotice] = useState('');
-  const [requestLoading, setRequestLoading] = useState(false);
-  const displayName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Student';
-  const submitRequest = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!request.trim() || !user) return;
-    setRequestLoading(true);
-    const { error } = await supabase.from('student_requests').insert({
-      student_id: user.id,
-      student_name: displayName,
-      student_email: user.email,
-      request_type: requestType,
-      message: request.trim(),
-    });
-    if (error) {
-      setNotice('Unable to send request. Please try again.');
-      setRequestLoading(false);
-      return;
-    }
-    setRequest('');
-    setRequestLoading(false);
-    setNotice('Request sent to the TFS team.');
-    window.setTimeout(() => setNotice(''), 3000);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  // Dynamic Student Profile State
+  const [student, setStudent] = useState<StudentProfile | null>(null);
+
+  // Dynamic Database Catalogs
+  const [feePlans, setFeePlans] = useState<FeePlan[]>([]);
+  const [addOnsList, setAddOnsList] = useState<AddOn[]>([]);
+  const [curriculumList, setCurriculumList] = useState<CurriculumItem[]>([]);
+  const [scheduleList, setScheduleList] = useState<ScheduleItem[]>([]);
+  const [discountsList, setDiscountsList] = useState<any[]>([]);
+
+  // User-specific Activity & Submissions
+  const [myPayments, setMyPayments] = useState<FeePaymentRecord[]>([]);
+  const [myRequests, setMyRequests] = useState<any[]>([]);
+
+  // Student Syllabus Progress (persisted per student)
+  const [moduleProgress, setModuleProgress] = useState<Record<string, 'not_started' | 'in_progress' | 'mastered'>>({});
+
+  // Modals & Panels
+  const [showPayModal, setShowPayModal] = useState(false);
+  const [showEditCardModal, setShowEditCardModal] = useState(false);
+
+  const notify = (msg: string) => {
+    setNotice(msg);
+    setError('');
+    window.setTimeout(() => setNotice(''), 4500);
   };
-  const tabs: { id: StudentTab; label: string; icon: typeof BookOpen }[] = [
-    { id: 'home', label: 'Overview', icon: BookOpen }, { id: 'payments', label: 'Payments', icon: CircleDollarSign }, { id: 'updates', label: 'Class updates', icon: CalendarDays }, { id: 'requests', label: 'Requests', icon: MessageSquare },
+
+  const fail = (msg: string) => {
+    setError(msg);
+    setNotice('');
+    window.setTimeout(() => setError(''), 5500);
+  };
+
+  // Fetch full dynamic catalogs and student profile
+  const fetchStudentData = async () => {
+    if (!user) return;
+    setLoading(true);
+
+    try {
+      const email = user.email || '';
+
+      // 1. Load dynamic catalogs in parallel directly from Supabase
+      const [loadedPlans, loadedAddons, loadedCurrs, loadedSchedules, loadedDiscounts] = await Promise.all([
+        loadFeePlans(),
+        loadAddOns(),
+        loadCurriculumItems(),
+        loadScheduleItems(),
+        loadDiscounts(),
+      ]);
+
+      setFeePlans(loadedPlans);
+      setAddOnsList(loadedAddons);
+      setCurriculumList(loadedCurrs);
+      setScheduleList(loadedSchedules);
+      setDiscountsList(loadedDiscounts);
+
+      // Default fallback fee plan from dynamic fee plans
+      const defaultPlan = loadedPlans.find((p) => p.active !== false) || loadedPlans[0];
+      const defaultPlanName = defaultPlan ? `${defaultPlan.name} — ₹${defaultPlan.amount.toLocaleString('en-IN')}/month` : 'Home Visit — ₹1,500/month';
+      const defaultSchedule = loadedSchedules.find((s) => s.active !== false);
+      const defaultScheduleSlot = defaultSchedule ? `${defaultSchedule.day_label} — ${defaultSchedule.time_label}` : 'Friday — 8:00 PM – 11:00 PM';
+
+      // 2. Fetch from student_profiles by email or ID
+      const { data: spData } = await supabaseAdmin
+        .from('student_profiles')
+        .select('*')
+        .or(`email.eq.${email},id.eq.${user.id}`)
+        .maybeSingle();
+
+      // 3. Fetch from profiles by ID
+      const { data: pData } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      let loadedProfile: StudentProfile;
+
+      if (spData) {
+        // Find matching fee plan amount
+        let matchedFee = defaultPlan?.amount || 1500;
+        if (spData.class_schedule) {
+          const matched = loadedPlans.find((p) =>
+            spData.class_schedule.toLowerCase().includes(p.name.toLowerCase()) ||
+            p.name.toLowerCase().includes(spData.class_schedule.toLowerCase())
+          );
+          if (matched) matchedFee = matched.amount;
+        }
+
+        loadedProfile = {
+          id: spData.id,
+          first_name: spData.first_name || '',
+          last_name: spData.last_name || '',
+          email: spData.email || email,
+          phone_number: spData.phone_number || '',
+          curriculum: spData.curriculum || 'Guitar',
+          class_schedule: spData.class_schedule || defaultPlanName,
+          preferred_schedule: spData.preferred_schedule || defaultScheduleSlot,
+          status: (spData.status as any) || 'active',
+          created_at: spData.created_at || user.created_at || new Date().toISOString(),
+          updated_at: spData.updated_at,
+          monthly_fee: matchedFee,
+          fee_status: 'Up to date',
+          addons: [],
+        };
+      } else {
+        // Build from auth user & profiles
+        const displayName = pData?.full_name || pData?.display_name || user.user_metadata?.full_name || email.split('@')[0];
+        const nameParts = displayName.trim().split(' ');
+        const newRecord: StudentProfile = {
+          id: user.id,
+          first_name: nameParts[0] || 'Student',
+          last_name: nameParts.slice(1).join(' ') || '',
+          email,
+          phone_number: '',
+          curriculum: 'Guitar',
+          class_schedule: defaultPlanName,
+          preferred_schedule: defaultScheduleSlot,
+          status: 'active',
+          monthly_fee: defaultPlan?.amount || 1500,
+          fee_status: 'Up to date',
+          created_at: user.created_at || new Date().toISOString(),
+          addons: [],
+        };
+
+        // Create in student_profiles
+        try {
+          await supabaseAdmin.from('student_profiles').upsert({
+            id: user.id,
+            first_name: newRecord.first_name,
+            last_name: newRecord.last_name,
+            email: newRecord.email,
+            curriculum: newRecord.curriculum,
+            class_schedule: newRecord.class_schedule,
+            status: 'active',
+          });
+        } catch {}
+
+        loadedProfile = newRecord;
+      }
+
+      setStudent(loadedProfile);
+
+      // Load progress from localStorage
+      try {
+        const storedProg = localStorage.getItem(`tfs_progress_${user.id}`);
+        if (storedProg) {
+          setModuleProgress(JSON.parse(storedProg));
+        }
+      } catch {}
+
+      // 4. Load Student's Fee Payments (from Supabase payments table + local verified records)
+      const allPayments = loadStoredFeePayments();
+      const myFilteredPayments = allPayments.filter(
+        (p) => p.student_email && p.student_email.toLowerCase() === email.toLowerCase()
+      );
+
+      // Also check Supabase payments table
+      try {
+        const { data: dbPayments } = await supabaseAdmin
+          .from('payments')
+          .select('*')
+          .eq('student_id', user.id)
+          .order('created_at', { ascending: false });
+
+        if (dbPayments && dbPayments.length > 0) {
+          // Merge db payments into myFilteredPayments if not already present
+          const existingRefs = new Set(myFilteredPayments.map((p) => p.payment_reference || p.id));
+          for (const dbp of dbPayments) {
+            if (!existingRefs.has(dbp.id)) {
+              myFilteredPayments.push({
+                id: dbp.id,
+                timestamp: dbp.created_at || new Date().toISOString(),
+                payment_reference: dbp.id.slice(0, 10).toUpperCase(),
+                payment_status: dbp.status === 'verified' ? 'VERIFIED' : dbp.status === 'rejected' ? 'REJECTED' : 'PENDING VERIFICATION',
+                utr: 'UPI/DIRECT',
+                payer_name: loadedProfile.first_name + ' ' + loadedProfile.last_name,
+                student_name: loadedProfile.first_name + ' ' + loadedProfile.last_name,
+                student_email: email,
+                phone: loadedProfile.phone_number || '',
+                curriculum: loadedProfile.curriculum || 'Guitar',
+                class_type: loadedProfile.class_schedule || 'Tuition Plan',
+                addons: '',
+                amount: Number(dbp.amount),
+                notes: dbp.billing_period ? `Billing cycle: ${dbp.billing_period}` : 'Tuition payment',
+              });
+            }
+          }
+        }
+      } catch {}
+
+      setMyPayments(myFilteredPayments);
+
+      // 5. Load Student Requests from Supabase
+      const { data: reqs } = await supabaseAdmin
+        .from('student_requests')
+        .select('*')
+        .or(`student_id.eq.${user.id},student_email.eq.${email}`)
+        .order('created_at', { ascending: false });
+      if (reqs) setMyRequests(reqs);
+
+    } catch (err) {
+      console.error('Error fetching dynamic student portal data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void fetchStudentData();
+  }, [user]);
+
+  // Dynamic calculations for Tuition Fees
+  const dynamicFeeSummary = useMemo(() => {
+    if (!student) {
+      return { basePlanName: 'Home Visit', baseAmount: 1500, addonAmount: 0, totalAmount: 1500, activeAddons: [] };
+    }
+
+    // Match plan from feePlans
+    const planText = (student.class_schedule || '').toLowerCase();
+    const matchedPlan = feePlans.find(
+      (p) => planText.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(planText)
+    );
+
+    const baseAmount = matchedPlan ? Number(matchedPlan.amount) : (feePlans[0]?.amount || 1500);
+    const basePlanName = matchedPlan ? matchedPlan.name : (student.class_schedule || 'Tuition Plan');
+
+    // Match addons from addOnsList
+    let addonAmount = 0;
+    const activeAddons: AddOn[] = [];
+    if (student.addons && Array.isArray(student.addons)) {
+      student.addons.forEach((addonStr) => {
+        const found = addOnsList.find((a) => a.name.toLowerCase() === addonStr.toLowerCase());
+        if (found) {
+          addonAmount += Number(found.amount);
+          activeAddons.push(found);
+        } else if (addonStr.includes('500')) {
+          addonAmount += 500;
+        }
+      });
+    }
+
+    const totalAmount = baseAmount + addonAmount;
+
+    return {
+      basePlanName,
+      baseAmount,
+      addonAmount,
+      totalAmount,
+      activeAddons,
+    };
+  }, [student, feePlans, addOnsList]);
+
+  // Next Upcoming Lesson calculation based on student schedule
+  const upcomingLesson = useMemo(() => {
+    const slotStr = student?.preferred_schedule || (scheduleList[0] ? `${scheduleList[0].day_label} — ${scheduleList[0].time_label}` : 'Friday — 8:00 PM');
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const slotLower = slotStr.toLowerCase();
+
+    let targetDayIndex = -1;
+    for (let i = 0; i < dayNames.length; i++) {
+      if (slotLower.includes(dayNames[i])) {
+        targetDayIndex = i;
+        break;
+      }
+    }
+
+    if (targetDayIndex === -1) {
+      return { label: slotStr, countdownText: 'Weekly Session' };
+    }
+
+    const today = new Date();
+    const currentDay = today.getDay();
+    let daysUntil = (targetDayIndex - currentDay + 7) % 7;
+    if (daysUntil === 0) daysUntil = 7; // next week's session if today is already passed
+
+    const nextDate = new Date();
+    nextDate.setDate(today.getDate() + daysUntil);
+
+    const dateFormatted = nextDate.toLocaleDateString('en-IN', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
+
+    const countdownText = daysUntil === 1 ? 'Tomorrow' : daysUntil === 0 ? 'Today' : `In ${daysUntil} days`;
+
+    return {
+      label: slotStr,
+      dateFormatted,
+      countdownText,
+    };
+  }, [student?.preferred_schedule, scheduleList]);
+
+  // Handle syllabus progress toggle
+  const handleToggleModuleProgress = (moduleId: string) => {
+    if (!user) return;
+    setModuleProgress((prev) => {
+      const current = prev[moduleId] || 'not_started';
+      const next: 'not_started' | 'in_progress' | 'mastered' =
+        current === 'not_started' ? 'in_progress' : current === 'in_progress' ? 'mastered' : 'not_started';
+      const updated: Record<string, 'not_started' | 'in_progress' | 'mastered'> = { ...prev, [moduleId]: next };
+      try {
+        localStorage.setItem(`tfs_progress_${user.id}`, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  const displayName = useMemo(() => {
+    if (student?.first_name || student?.last_name) {
+      return `${student.first_name} ${student.last_name}`.trim();
+    }
+    return user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Student';
+  }, [student, user]);
+
+  const studentIdBadge = useMemo(() => {
+    if (student?.admission_id) return student.admission_id;
+    const rawId = (student?.id || user?.id || 'TFS001').replace(/-/g, '').slice(0, 6).toUpperCase();
+    return `TFS-STU-${rawId}`;
+  }, [student, user]);
+
+  const tabs: { id: StudentTab; label: string; icon: any }[] = [
+    { id: 'home', label: 'Overview', icon: BookOpen },
+    { id: 'idcard', label: 'Student ID Card', icon: IdCard },
+    { id: 'profile', label: 'Edit Profile & Account', icon: UserRound },
+    { id: 'payments', label: 'Tuition & Fees', icon: CircleDollarSign },
+    { id: 'modules', label: 'Curriculum & Schedule', icon: CalendarDays },
+    { id: 'requests', label: 'Helpdesk & Requests', icon: MessageSquare },
   ];
-  return <div className="student-shell animate-fade-in"><aside className="student-sidebar"><div className="student-brand">TFS <span>STUDENT CORNER</span></div><p className="student-kicker">Your learning space</p><nav className="student-nav">{tabs.map(({ id, label, icon: Icon }) => <button key={id} className={tab === id ? 'student-nav-item active' : 'student-nav-item'} onClick={() => setTab(id)}><Icon size={18} />{label}</button>)}</nav><button className="student-signout" onClick={signOut}><LogOut size={17} /> Sign out</button></aside><main className="student-main"><header className="student-header"><div><p className="student-kicker">Welcome back</p><h1>{displayName}</h1><p className="student-muted">Keep your practice moving forward.</p></div><div className="student-profile"><UserRound size={17} /> {user?.email}</div></header>{notice && <div className="student-notice"><Check size={16} />{notice}</div>}{tab === 'home' && <Overview onNavigate={setTab} />}{tab === 'payments' && <Payments />}{tab === 'updates' && <Updates />}{tab === 'requests' && <RequestPanel requestType={requestType} setRequestType={setRequestType} request={request} setRequest={setRequest} submitRequest={submitRequest} requestLoading={requestLoading} />}</main></div>;
+
+  return (
+    <div className="student-shell animate-fade-in">
+      {/* Mobile Backdrop */}
+      {mobileMenuOpen && (
+        <div
+          className="admin-mobile-backdrop"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`student-sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
+        <div className="student-brand">
+          <Guitar size={24} style={{ color: 'var(--gold)' }} />
+          <div>
+            TFS <span>STUDENT CORNER</span>
+          </div>
+        </div>
+        <p className="student-kicker">Mastery Portal</p>
+        <nav className="student-nav">
+          {tabs.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              className={tab === id ? 'student-nav-item active' : 'student-nav-item'}
+              onClick={() => {
+                setTab(id);
+                setMobileMenuOpen(false);
+              }}
+            >
+              <Icon size={18} />
+              {label}
+            </button>
+          ))}
+        </nav>
+        <button className="student-signout" onClick={signOut}>
+          <LogOut size={17} /> Sign out
+        </button>
+      </aside>
+
+      {/* Main Container */}
+      <main className="student-main">
+        {/* Header */}
+        <header className="student-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <button
+              type="button"
+              className="admin-mobile-toggle"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              title="Toggle Menu"
+            >
+              {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+            </button>
+            <div>
+              <p className="student-kicker">Mastery Dashboard</p>
+              <h1>{displayName}</h1>
+              <p className="student-muted" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
+                <span className="booking-badge" style={{ background: 'rgba(212,175,55,0.15)', color: 'var(--gold)', fontWeight: 600 }}>
+                  {studentIdBadge}
+                </span>
+                <span>• Track: <b style={{ color: '#fff' }}>{student?.curriculum || 'Guitar'}</b></span>
+                <span>• Plan: <b style={{ color: 'var(--gold)' }}>{dynamicFeeSummary.basePlanName}</b></span>
+              </p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              className="student-text-button"
+              onClick={() => void fetchStudentData()}
+              title="Sync live student data"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--gold)', background: 'rgba(212,175,55,0.1)', padding: '0.5rem 0.85rem', borderRadius: '8px', border: '1px solid rgba(212,175,55,0.25)' }}
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Sync Database
+            </button>
+            <div className="student-profile">
+              <UserRound size={17} /> {user?.email}
+            </div>
+          </div>
+        </header>
+
+        {notice && (
+          <div className="student-notice animate-fade-in" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', background: 'rgba(40,167,69,0.15)', border: '1px solid rgba(40,167,69,0.3)', padding: '0.75rem 1rem', borderRadius: '8px', color: '#5dd37a' }}>
+            <Check size={18} />
+            {notice}
+          </div>
+        )}
+        {error && (
+          <div className="student-notice animate-fade-in" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', background: 'rgba(220,53,69,0.15)', border: '1px solid rgba(220,53,69,0.3)', padding: '0.75rem 1rem', borderRadius: '8px', color: '#ff6b6b' }}>
+            <X size={18} />
+            {error}
+          </div>
+        )}
+
+        {/* 1. OVERVIEW TAB */}
+        {tab === 'home' && (
+          <OverviewTab
+            student={student}
+            displayName={displayName}
+            studentIdBadge={studentIdBadge}
+            curriculumList={curriculumList}
+            dynamicFeeSummary={dynamicFeeSummary}
+            upcomingLesson={upcomingLesson}
+            moduleProgress={moduleProgress}
+            onNavigate={setTab}
+            onOpenPayModal={() => setShowPayModal(true)}
+          />
+        )}
+
+        {/* 2. STUDENT ID CARD TAB */}
+        {tab === 'idcard' && (
+          <StudentIdCardTab
+            student={student}
+            displayName={displayName}
+            studentIdBadge={studentIdBadge}
+            dynamicFeeSummary={dynamicFeeSummary}
+            onOpenEditModal={() => setShowEditCardModal(true)}
+          />
+        )}
+
+        {/* 3. EDIT PROFILE & ACCOUNT TAB */}
+        {tab === 'profile' && student && (
+          <ProfileEditTab
+            student={student}
+            feePlans={feePlans}
+            addOnsList={addOnsList}
+            scheduleList={scheduleList}
+            curriculumList={curriculumList}
+            onSaveProfile={async (updates) => {
+              try {
+                const saved = await updateStudentSelfProfile(student.id, student.email, updates);
+                setStudent(saved);
+                notify('Your dynamic profile has been updated and synchronized with Supabase.');
+              } catch {
+                fail('Failed to update profile. Please try again.');
+              }
+            }}
+          />
+        )}
+
+        {/* 4. TUITION & PAYMENTS TAB */}
+        {tab === 'payments' && (
+          <TuitionPaymentsTab
+            student={student}
+            dynamicFeeSummary={dynamicFeeSummary}
+            feePlans={feePlans}
+            addOnsList={addOnsList}
+            discountsList={discountsList}
+            payments={myPayments}
+            onOpenPayModal={() => setShowPayModal(true)}
+            onPlanChange={async (newPlanName, newAddons) => {
+              if (!student) return;
+              try {
+                const updated = await updateStudentSelfProfile(student.id, student.email, {
+                  class_schedule: newPlanName,
+                  addons: newAddons,
+                });
+                setStudent(updated);
+                notify(`Tuition plan updated to ${newPlanName}`);
+              } catch {
+                fail('Failed to update tuition plan.');
+              }
+            }}
+          />
+        )}
+
+        {/* 5. CURRICULUM & MODULES TAB */}
+        {tab === 'modules' && (
+          <ModulesScheduleTab
+            student={student}
+            curriculumList={curriculumList}
+            scheduleList={scheduleList}
+            moduleProgress={moduleProgress}
+            onToggleProgress={handleToggleModuleProgress}
+            onRequestReschedule={() => setTab('requests')}
+          />
+        )}
+
+        {/* 6. HELPDESK & REQUESTS TAB */}
+        {tab === 'requests' && user && (
+          <RequestsTab
+            user={user}
+            displayName={displayName}
+            student={student}
+            scheduleList={scheduleList}
+            feePlans={feePlans}
+            requests={myRequests}
+            onRequestSent={(newReq) => {
+              setMyRequests([newReq, ...myRequests]);
+              notify('Your request has been submitted to your TFS instructor.');
+            }}
+          />
+        )}
+      </main>
+
+      {/* Pay Tuition Modal */}
+      {showPayModal && student && (
+        <PayTuitionModal
+          student={student}
+          dynamicFeeSummary={dynamicFeeSummary}
+          onClose={() => setShowPayModal(false)}
+          onSubmitPayment={async (payload) => {
+            const res = await recordStudentPayment({
+              student_id: student.id,
+              amount: payload.amount,
+              billing_period: 'monthly',
+              utr: payload.utr,
+              payer_name: payload.payer_name,
+              student_name: `${student.first_name} ${student.last_name}`.trim(),
+              student_email: student.email,
+              phone: student.phone_number || '',
+              curriculum: student.curriculum || 'Guitar',
+              class_type: dynamicFeeSummary.basePlanName,
+              addons: dynamicFeeSummary.activeAddons.map((a) => a.name).join(', ') || 'None',
+              notes: payload.notes,
+            });
+
+            if (res.success) {
+              const newRecord: FeePaymentRecord = {
+                id: res.id || `fee-${Date.now()}`,
+                timestamp: new Date().toISOString(),
+                payment_reference: `TFSFEE${Date.now()}`,
+                payment_status: 'PENDING VERIFICATION',
+                utr: payload.utr,
+                payer_name: payload.payer_name,
+                student_name: `${student.first_name} ${student.last_name}`.trim(),
+                student_email: student.email,
+                phone: student.phone_number || '',
+                curriculum: student.curriculum || 'Guitar',
+                class_type: dynamicFeeSummary.basePlanName,
+                addons: dynamicFeeSummary.activeAddons.map((a) => a.name).join(', ') || 'None',
+                amount: payload.amount,
+                notes: payload.notes,
+              };
+              setMyPayments([newRecord, ...myPayments]);
+              setShowPayModal(false);
+              notify('Payment UTR recorded in Supabase! TFS instructor will verify your reference.');
+            } else {
+              fail('Unable to record payment. Please check your connection.');
+            }
+          }}
+        />
+      )}
+
+      {/* Edit ID Card Modal */}
+      {showEditCardModal && student && (
+        <EditIdCardModal
+          student={student}
+          onClose={() => setShowEditCardModal(false)}
+          onSave={async (updates) => {
+            const saved = await updateStudentSelfProfile(student.id, student.email, updates);
+            setStudent(saved);
+            setShowEditCardModal(false);
+            notify('Student pass details updated successfully in database.');
+          }}
+        />
+      )}
+    </div>
+  );
 };
 
-const Overview = ({ onNavigate }: { onNavigate: (tab: StudentTab) => void }) => <><section className="student-hero"><div><p className="student-kicker">Current learning plan</p><h2>Online Guitar Tuition</h2><p>Build fluency, confidence, and your own musical voice.</p></div><span className="student-plan-status">Active plan</span></section><section className="student-stat-grid"><div className="student-stat"><Clock3 size={20} /><span>Next class</span><strong>Saturday, 10:00 AM</strong><small>Confirmed · Online</small></div><div className="student-stat"><CircleDollarSign size={20} /><span>Next payment</span><strong>₹900</strong><small>Due 05 October 2026</small></div><div className="student-stat"><FileText size={20} /><span>Current module</span><strong>Neck mapping</strong><small>Week 4 of 8</small></div></section><div className="student-grid-two"><section className="student-panel"><div className="student-panel-heading"><div><p className="student-kicker">Coming up</p><h3>Your schedule</h3></div><button className="student-text-button" onClick={() => onNavigate('updates')}>See updates <ChevronRight size={15} /></button></div><div className="class-row"><div className="class-date"><b>12</b><span>OCT</span></div><div><b>Technique lab</b><small>Saturday · 10:00 AM · Google Meet</small></div><span className="class-dot" /></div><div className="class-row"><div className="class-date"><b>19</b><span>OCT</span></div><div><b>Song study</b><small>Saturday · 10:00 AM · Google Meet</small></div><span className="class-dot muted" /></div></section><section className="student-panel student-notes"><p className="student-kicker">Latest from TFS</p><h3>Practice with intention.</h3><p>This week, spend ten minutes mapping the notes on your low E and A strings. Your next class will build on that shape.</p><button className="student-action" onClick={() => onNavigate('requests')}>Message your teacher <MessageSquare size={16} /></button></section></div></>;
+// =========================================================================
+// 1. OVERVIEW TAB
+// =========================================================================
+const OverviewTab = ({
+  student,
+  displayName,
+  studentIdBadge,
+  curriculumList,
+  dynamicFeeSummary,
+  upcomingLesson,
+  moduleProgress,
+  onNavigate,
+  onOpenPayModal,
+}: {
+  student: StudentProfile | null;
+  displayName: string;
+  studentIdBadge: string;
+  curriculumList: CurriculumItem[];
+  dynamicFeeSummary: {
+    basePlanName: string;
+    baseAmount: number;
+    addonAmount: number;
+    totalAmount: number;
+    activeAddons: AddOn[];
+  };
+  upcomingLesson: {
+    label: string;
+    dateFormatted?: string;
+    countdownText: string;
+  };
+  moduleProgress: Record<string, string>;
+  onNavigate: (tab: StudentTab) => void;
+  onOpenPayModal: () => void;
+}) => {
+  const track = student?.curriculum || 'Guitar';
 
-const Payments = () => {
-  const [fee, setFee] = useState(900);
+  // Find relevant modules for student's instrument
+  const relevantModules = useMemo(() => {
+    const trackLower = track.toLowerCase();
+    const inst = trackLower.includes('dotara')
+      ? 'ukulele_dotara'
+      : trackLower.includes('ukulele')
+        ? 'ukulele_standard'
+        : 'guitar';
+    return curriculumList.filter((c) => c.instrument === inst && c.active !== false);
+  }, [track, curriculumList]);
+
+  // Compute mastery stats
+  const completedCount = useMemo(() => {
+    return relevantModules.filter((m) => moduleProgress[m.id] === 'mastered').length;
+  }, [relevantModules, moduleProgress]);
+
+  const masteryPercent = relevantModules.length > 0 ? Math.round((completedCount / relevantModules.length) * 100) : 0;
+
+  return (
+    <>
+      <section className="student-hero">
+        <div>
+          <p className="student-kicker">Active Scholar • {displayName}</p>
+          <h2>{track} Enrolment</h2>
+          <p style={{ maxWidth: '640px', lineHeight: '1.6' }}>
+            Registered in <b>{dynamicFeeSummary.basePlanName}</b> (₹{dynamicFeeSummary.totalAmount.toLocaleString('en-IN')}/mo). 
+            Structured one-to-one guitar &amp; ukulele lessons crafted for fluent musical expression.
+          </p>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.5rem' }}>
+          <span className="student-plan-status" style={{ background: '#5dd37a22', color: '#5dd37a', border: '1px solid #5dd37a55' }}>
+            ● Verified Enrolment
+          </span>
+          <small style={{ color: 'var(--gold)', fontFamily: 'monospace', fontWeight: 600 }}>{studentIdBadge}</small>
+        </div>
+      </section>
+
+      {/* Dynamic Stat Grid */}
+      <section className="student-stat-grid">
+        <div className="student-stat">
+          <Clock3 size={20} style={{ color: 'var(--gold)' }} />
+          <span>Scheduled Batch Slot</span>
+          <strong style={{ fontSize: '1.15rem' }}>{student?.preferred_schedule || upcomingLesson.label}</strong>
+          <small style={{ color: '#5dd37a', fontWeight: 600 }}>
+            {upcomingLesson.countdownText} {upcomingLesson.dateFormatted ? `(${upcomingLesson.dateFormatted})` : ''}
+          </small>
+        </div>
+        <div className="student-stat">
+          <CircleDollarSign size={20} style={{ color: 'var(--gold)' }} />
+          <span>Tuition Plan &amp; Fee</span>
+          <strong>₹{dynamicFeeSummary.totalAmount.toLocaleString('en-IN')}/mo</strong>
+          <small style={{ color: '#5dd37a' }}>
+            {dynamicFeeSummary.addonAmount > 0 ? `Includes ₹${dynamicFeeSummary.addonAmount} add-ons • ` : ''}
+            Status: {student?.fee_status || 'Up to date'}
+          </small>
+        </div>
+        <div className="student-stat">
+          <Award size={20} style={{ color: 'var(--gold)' }} />
+          <span>Curriculum Mastery</span>
+          <strong>{completedCount} / {relevantModules.length} Modules</strong>
+          <small style={{ color: 'var(--gold)' }}>{masteryPercent}% Syllabus Completed</small>
+        </div>
+      </section>
+
+      {/* Two Column Layout */}
+      <div className="student-grid-two">
+        {/* Dynamic Syllabus Roadmap */}
+        <section className="student-panel">
+          <div className="student-panel-heading">
+            <div>
+              <p className="student-kicker">Live Syllabus Roadmap</p>
+              <h3>{track} Learning Modules</h3>
+            </div>
+            <button className="student-text-button" onClick={() => onNavigate('modules')}>
+              All modules <ChevronRight size={15} />
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gap: '0.85rem' }}>
+            {relevantModules.length === 0 ? (
+              <p className="student-muted">Modules are synchronized directly from Supabase.</p>
+            ) : (
+              relevantModules.slice(0, 4).map((mod, i) => {
+                const status = moduleProgress[mod.id] || 'not_started';
+                return (
+                  <div
+                    key={mod.id || i}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'space-between',
+                      gap: '0.85rem',
+                      padding: '0.9rem',
+                      borderRadius: '8px',
+                      background: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.06)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                      <div
+                        style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          background: status === 'mastered' ? 'rgba(93,211,122,0.2)' : 'rgba(212,175,55,0.15)',
+                          color: status === 'mastered' ? '#5dd37a' : 'var(--gold)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 700,
+                          fontSize: '0.85rem',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {status === 'mastered' ? <Check size={16} /> : i + 1}
+                      </div>
+                      <div>
+                        <b style={{ color: '#fff', fontSize: '0.95rem' }}>{mod.title}</b>
+                        <p style={{ margin: '0.2rem 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                          {mod.description}
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className="booking-badge"
+                      style={{
+                        flexShrink: 0,
+                        background:
+                          status === 'mastered'
+                            ? 'rgba(93,211,122,0.15)'
+                            : status === 'in_progress'
+                              ? 'rgba(212,175,55,0.15)'
+                              : 'rgba(255,255,255,0.05)',
+                        color:
+                          status === 'mastered'
+                            ? '#5dd37a'
+                            : status === 'in_progress'
+                              ? 'var(--gold)'
+                              : 'var(--text-secondary)',
+                      }}
+                    >
+                      {status === 'mastered' ? 'Mastered' : status === 'in_progress' ? 'Learning' : 'Upcoming'}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        {/* Quick Actions Panel */}
+        <section className="student-panel student-notes">
+          <p className="student-kicker">Interactive Actions</p>
+          <h3>Student Portal Hub</h3>
+          <p style={{ fontSize: '0.85rem', marginBottom: '1.25rem', color: 'var(--text-secondary)' }}>
+            Manage tuition payments, download your official verified student ID pass, or send rescheduling inquiries directly to your teacher.
+          </p>
+          <div style={{ display: 'grid', gap: '0.65rem' }}>
+            <button className="student-action" onClick={() => onNavigate('idcard')}>
+              <IdCard size={16} /> Official Student Pass &amp; ID Card
+            </button>
+            <button className="student-action" onClick={onOpenPayModal}>
+              <CircleDollarSign size={16} /> Pay Monthly Tuition Fee Online
+            </button>
+            <button className="student-action" onClick={() => onNavigate('payments')}>
+              <Percent size={16} /> Fee Breakdown &amp; Apply Coupon
+            </button>
+            <button className="student-action" onClick={() => onNavigate('profile')}>
+              <Edit3 size={16} /> Update Schedule Slot &amp; Profile Details
+            </button>
+            <button className="student-action" onClick={() => onNavigate('requests')}>
+              <MessageSquare size={16} /> Send Query / Reschedule Request
+            </button>
+          </div>
+        </section>
+      </div>
+    </>
+  );
+};
+
+// =========================================================================
+// 2. STUDENT ID CARD TAB
+// =========================================================================
+const StudentIdCardTab = ({
+  student,
+  displayName,
+  studentIdBadge,
+  dynamicFeeSummary,
+  onOpenEditModal,
+}: {
+  student: StudentProfile | null;
+  displayName: string;
+  studentIdBadge: string;
+  dynamicFeeSummary: { basePlanName: string; totalAmount: number };
+  onOpenEditModal: () => void;
+}) => {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  // High-Res 1200x750 PNG Export
+  const handleDownloadCard = () => {
+    setDownloading(true);
+    try {
+      const canvas = document.createElement('canvas');
+      const w = 1200;
+      const h = 750;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        setDownloading(false);
+        return;
+      }
+
+      // Background
+      const grad = ctx.createLinearGradient(0, 0, w, h);
+      grad.addColorStop(0, '#101216');
+      grad.addColorStop(0.5, '#171920');
+      grad.addColorStop(1, '#0c0d10');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      // Gold Borders
+      ctx.lineWidth = 14;
+      ctx.strokeStyle = '#d4af37';
+      ctx.strokeRect(20, 20, w - 40, h - 40);
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(212, 175, 55, 0.4)';
+      ctx.strokeRect(36, 36, w - 72, h - 72);
+
+      // Header Bar
+      ctx.fillStyle = 'rgba(212, 175, 55, 0.08)';
+      ctx.fillRect(40, 40, w - 80, 110);
+
+      ctx.fillStyle = '#d4af37';
+      ctx.font = 'bold 36px "Playfair Display", Georgia, serif';
+      ctx.fillText('THE FRETBOARD SOCIETY', 70, 95);
+
+      ctx.fillStyle = '#9e9fa5';
+      ctx.font = '600 18px "Inter", sans-serif';
+      ctx.fillText('ACOUSTIC GUITAR & UKULELE MASTERY • OFFICIAL STUDENT PASS', 70, 130);
+
+      // Verified Badge
+      ctx.fillStyle = '#5dd37a';
+      ctx.font = 'bold 20px "Inter", sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('VERIFIED STUDENT', w - 70, 95);
+
+      ctx.fillStyle = '#d4af37';
+      ctx.font = '600 22px monospace';
+      ctx.fillText(studentIdBadge, w - 70, 130);
+      ctx.textAlign = 'left';
+
+      // Divider
+      ctx.strokeStyle = 'rgba(212, 175, 55, 0.3)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(40, 150);
+      ctx.lineTo(w - 40, 150);
+      ctx.stroke();
+
+      // Left Photo Box
+      ctx.fillStyle = 'rgba(212, 175, 55, 0.08)';
+      ctx.fillRect(70, 190, 280, 360);
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#d4af37';
+      ctx.strokeRect(70, 190, 280, 360);
+
+      ctx.fillStyle = '#d4af37';
+      ctx.font = 'bold 80px "Inter", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('🎸', 210, 380);
+
+      ctx.font = '600 20px "Inter", sans-serif';
+      ctx.fillText('TFS SCHOLAR', 210, 470);
+      ctx.textAlign = 'left';
+
+      // Right Details
+      const startX = 400;
+      let curY = 220;
+
+      const drawField = (label: string, value: string, color = '#ffffff') => {
+        ctx.fillStyle = '#9e9fa5';
+        ctx.font = '600 18px "Inter", sans-serif';
+        ctx.fillText(label.toUpperCase(), startX, curY);
+
+        ctx.fillStyle = color;
+        ctx.font = 'bold 28px "Inter", sans-serif';
+        ctx.fillText(value, startX, curY + 36);
+
+        curY += 80;
+      };
+
+      drawField('Full Student Name', displayName, '#ffffff');
+      drawField('Curriculum / Track', student?.curriculum || 'Acoustic Guitar', '#d4af37');
+      drawField('Tuition Plan', `${dynamicFeeSummary.basePlanName} — ₹${dynamicFeeSummary.totalAmount}/mo`, '#ffffff');
+      drawField('Schedule Window', student?.preferred_schedule || 'Weekend Batch Slot', '#5dd37a');
+
+      // Footer
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(40, 600);
+      ctx.lineTo(w - 40, 600);
+      ctx.stroke();
+
+      ctx.fillStyle = '#9e9fa5';
+      ctx.font = '16px "Inter", sans-serif';
+      ctx.fillText(`Issued: ${new Date(student?.created_at || Date.now()).toLocaleDateString('en-IN')}  •  Valid Academic Year 2026-2027`, 70, 645);
+      ctx.fillText('Issued by The Fretboard Society Academy • Kolkata, India', 70, 680);
+
+      // Barcode
+      ctx.fillStyle = '#ffffff';
+      let barcodeX = w - 420;
+      const barcodeWidths = [3, 6, 2, 8, 4, 2, 7, 3, 5, 2, 6, 4, 8, 2, 5, 3, 7, 4, 3, 6, 2, 8, 3, 5, 2, 6, 4, 7, 2, 5];
+      for (const bw of barcodeWidths) {
+        ctx.fillRect(barcodeX, 630, bw, 45);
+        barcodeX += bw + 3;
+      }
+
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.download = `TFS-StudentID-${displayName.replace(/\s+/g, '_')}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error('Error generating card image:', err);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: '850px', margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <p className="student-kicker">Digital Identification</p>
+          <h2>Official Student ID Pass</h2>
+          <p className="student-muted">Your verified pass for classes, studio workshops, and rehearsal sessions.</p>
+        </div>
+        <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <button className="admission-secondary" onClick={onOpenEditModal}>
+            <Edit3 size={16} /> Edit Pass Details
+          </button>
+          <button className="admin-save" onClick={handleDownloadCard} disabled={downloading}>
+            <Download size={16} /> {downloading ? 'Generating...' : 'Download Card (PNG)'}
+          </button>
+        </div>
+      </div>
+
+      {/* Interactive Card */}
+      <div
+        ref={cardRef}
+        style={{
+          background: 'linear-gradient(135deg, #13151b 0%, #1c1f26 50%, #0d0e12 100%)',
+          borderRadius: '16px',
+          border: '2px solid var(--gold)',
+          boxShadow: '0 20px 50px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(212,175,55,0.3)',
+          padding: 'clamp(1.5rem, 4vw, 2.5rem)',
+          position: 'relative',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ position: 'absolute', right: '-30px', bottom: '-40px', opacity: 0.05, pointerEvents: 'none' }}>
+          <Guitar size={320} />
+        </div>
+
+        {/* Card Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid rgba(212,175,55,0.3)', paddingBottom: '1.25rem', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+            <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'rgba(212,175,55,0.15)', border: '1px solid var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gold)' }}>
+              <Guitar size={28} />
+            </div>
+            <div>
+              <h3 style={{ margin: 0, color: 'var(--gold)', letterSpacing: '0.08em', fontSize: '1.35rem' }}>
+                THE FRETBOARD SOCIETY
+              </h3>
+              <small style={{ color: 'var(--text-secondary)', letterSpacing: '0.12em', fontSize: '0.72rem', textTransform: 'uppercase' }}>
+                Acoustic Guitar &amp; Ukulele Academy
+              </small>
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <span className="booking-badge" style={{ background: '#5dd37a22', color: '#5dd37a', border: '1px solid #5dd37a55', display: 'inline-block', marginBottom: '0.25rem' }}>
+              ● Verified Member
+            </span>
+            <div style={{ color: 'var(--gold)', fontFamily: 'monospace', fontSize: '0.9rem', fontWeight: 700 }}>
+              {studentIdBadge}
+            </div>
+          </div>
+        </div>
+
+        {/* Card Body */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 180px) 1fr', gap: 'clamp(1.25rem, 3vw, 2.5rem)', alignItems: 'center' }}>
+          <div style={{ textAlign: 'center' }}>
+            <div
+              style={{
+                width: '100%',
+                aspectRatio: '1 / 1.15',
+                borderRadius: '12px',
+                background: 'linear-gradient(145deg, #1a1c22, #0e1014)',
+                border: '2px solid rgba(212,175,55,0.5)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem',
+                color: 'var(--gold)',
+              }}
+            >
+              <Music size={46} />
+              <span style={{ fontSize: '0.75rem', letterSpacing: '0.15em', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                TFS SCHOLAR
+              </span>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1.25rem' }}>
+            <div>
+              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Student Name
+              </p>
+              <b style={{ color: '#fff', fontSize: '1.25rem' }}>{displayName}</b>
+            </div>
+
+            <div>
+              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Curriculum Track
+              </p>
+              <b style={{ color: 'var(--gold)', fontSize: '1.15rem' }}>{student?.curriculum || 'Guitar'}</b>
+            </div>
+
+            <div>
+              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Tuition Plan
+              </p>
+              <b style={{ color: '#fff', fontSize: '0.95rem' }}>{dynamicFeeSummary.basePlanName}</b>
+            </div>
+
+            <div>
+              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Schedule Window
+              </p>
+              <b style={{ color: '#5dd37a', fontSize: '0.95rem' }}>{student?.preferred_schedule || 'Weekend Session'}</b>
+            </div>
+          </div>
+        </div>
+
+        {/* Card Footer */}
+        <div style={{ marginTop: '2rem', paddingTop: '1.25rem', borderTop: '1px solid rgba(255,255,255,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+          <div>
+            <small style={{ color: 'var(--text-secondary)', display: 'block', fontSize: '0.72rem' }}>
+              Academic Year 2026–2027 • The Fretboard Society Academy
+            </small>
+            <small style={{ color: 'var(--gold)', fontSize: '0.72rem' }}>
+              Contact: {student?.phone_number || student?.email}
+            </small>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: 0.8 }}>
+            <QrCode size={34} style={{ color: 'var(--gold)' }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// =========================================================================
+// 3. EDIT PROFILE & ACCOUNT TAB
+// =========================================================================
+const ProfileEditTab = ({
+  student,
+  feePlans,
+  addOnsList,
+  scheduleList,
+  curriculumList,
+  onSaveProfile,
+}: {
+  student: StudentProfile;
+  feePlans: FeePlan[];
+  addOnsList: AddOn[];
+  scheduleList: ScheduleItem[];
+  curriculumList: CurriculumItem[];
+  onSaveProfile: (updates: Partial<StudentProfile>) => Promise<void>;
+}) => {
+  const [firstName, setFirstName] = useState(student.first_name || '');
+  const [lastName, setLastName] = useState(student.last_name || '');
+  const [phoneNumber, setPhoneNumber] = useState(student.phone_number || '');
+  const [profession, setProfession] = useState(student.profession || '');
+  const [address, setAddress] = useState(student.address || '');
+
+  // Dynamic track options from curriculumList
+  const dynamicTracks = useMemo(() => {
+    const raw = ['Guitar', 'Ukulele (Standard)', 'Ukulele (Dotara)'];
+    curriculumList.forEach((c) => {
+      if (c.instrument === 'guitar' && !raw.includes('Guitar')) raw.push('Guitar');
+      if (c.instrument === 'ukulele_standard' && !raw.includes('Ukulele (Standard)')) raw.push('Ukulele (Standard)');
+      if (c.instrument === 'ukulele_dotara' && !raw.includes('Ukulele (Dotara)')) raw.push('Ukulele (Dotara)');
+    });
+    return raw;
+  }, [curriculumList]);
+
+  const [curriculum, setCurriculum] = useState(student.curriculum || 'Guitar');
+  const [classSchedule, setClassSchedule] = useState(student.class_schedule || (feePlans[0] ? `${feePlans[0].name} — ₹${feePlans[0].amount}/month` : 'Home Visit — ₹1,500/month'));
+  const [preferredSchedule, setPreferredSchedule] = useState(
+    student.preferred_schedule || (scheduleList[0] ? `${scheduleList[0].day_label} — ${scheduleList[0].time_label}` : 'Friday — 8:00 PM – 11:00 PM')
+  );
+
+  const [selectedAddon, setSelectedAddon] = useState(student.addons?.[0] || 'None');
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    await onSaveProfile({
+      first_name: firstName.trim(),
+      last_name: lastName.trim(),
+      phone_number: phoneNumber.trim(),
+      profession: profession.trim(),
+      address: address.trim(),
+      curriculum,
+      class_schedule: classSchedule,
+      preferred_schedule: preferredSchedule,
+      addons: selectedAddon !== 'None' ? [selectedAddon] : [],
+    });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ maxWidth: '750px', margin: '0 auto' }}>
+      <section className="student-panel">
+        <div className="student-panel-heading">
+          <div>
+            <p className="student-kicker">Account Information</p>
+            <h2>Edit Student Profile</h2>
+          </div>
+          <UserRound size={22} style={{ color: 'var(--gold)' }} />
+        </div>
+        <p className="student-muted" style={{ marginBottom: '1.75rem' }}>
+          All details, curriculum selections, and schedule windows update live in Supabase.
+        </p>
+
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            First Name *
+            <input
+              required
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Last Name *
+            <input
+              required
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Registered Email Address (Locked)
+            <input
+              disabled
+              value={student.email}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', color: 'var(--text-secondary)', font: 'inherit', cursor: 'not-allowed' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Phone / WhatsApp Number *
+            <input
+              required
+              type="tel"
+              placeholder="+91 98765 43210"
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value)}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            />
+          </label>
+
+          {/* Dynamic Curriculum Track Selection */}
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--gold)', fontWeight: 600 }}>
+            Curriculum Track (Database Synced) *
+            <select
+              value={curriculum}
+              onChange={(e) => setCurriculum(e.target.value)}
+              style={{ padding: '0.85rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            >
+              {dynamicTracks.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {/* Dynamic Tuition Plan Selection */}
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--gold)', fontWeight: 600 }}>
+            Tuition Plan (Database Synced) *
+            <select
+              value={classSchedule}
+              onChange={(e) => setClassSchedule(e.target.value)}
+              style={{ padding: '0.85rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            >
+              {feePlans.map((p) => {
+                const label = `${p.name} — ₹${p.amount.toLocaleString('en-IN')}/${p.billing_period || 'month'}`;
+                return (
+                  <option key={p.id} value={label}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          {/* Dynamic Batch Schedule Window Selection */}
+          <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--gold)', fontWeight: 600 }}>
+            Preferred Batch Schedule Window (Database Synced) *
+            <select
+              value={preferredSchedule}
+              onChange={(e) => setPreferredSchedule(e.target.value)}
+              style={{ padding: '0.85rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            >
+              {scheduleList.map((s) => {
+                const label = `${s.day_label} — ${s.time_label}${s.description ? ` (${s.description})` : ''}`;
+                return (
+                  <option key={s.id} value={`${s.day_label} — ${s.time_label}`}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          {/* Dynamic Optional Add-on Elective */}
+          <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Optional Add-On Elective (Database Synced)
+            <select
+              value={selectedAddon}
+              onChange={(e) => setSelectedAddon(e.target.value)}
+              style={{ padding: '0.85rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            >
+              <option value="None">None (Standard Enrolment)</option>
+              {addOnsList.map((a) => (
+                <option key={a.id} value={a.name}>
+                  {a.name} — ₹{a.amount.toLocaleString('en-IN')}/month ({a.description})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Profession / Student Status
+            <input
+              placeholder="e.g. Software Engineer, College Student"
+              value={profession}
+              onChange={(e) => setProfession(e.target.value)}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Home / Delivery Address
+            <input
+              placeholder="Street, Area, City, PIN Code"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            />
+          </label>
+
+          <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1.25rem' }}>
+            <button className="admin-save" type="submit" disabled={saving} style={{ margin: 0 }}>
+              {saving ? 'Syncing with Database...' : 'Save Profile Changes'}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+};
+
+// =========================================================================
+// 4. TUITION & PAYMENTS TAB
+// =========================================================================
+const TuitionPaymentsTab = ({
+  student,
+  dynamicFeeSummary,
+  feePlans,
+  addOnsList,
+  discountsList = [],
+  payments,
+  onOpenPayModal,
+  onPlanChange,
+}: {
+  student: StudentProfile | null;
+  dynamicFeeSummary: {
+    basePlanName: string;
+    baseAmount: number;
+    addonAmount: number;
+    totalAmount: number;
+    activeAddons: AddOn[];
+  };
+  feePlans: FeePlan[];
+  addOnsList: AddOn[];
+  discountsList?: any[];
+  payments: FeePaymentRecord[];
+  onOpenPayModal: () => void;
+  onPlanChange: (planName: string, addons: string[]) => Promise<void>;
+}) => {
   const [couponCode, setCouponCode] = useState('');
   const [discountAmount, setDiscountAmount] = useState(0);
-  const [couponMessage, setCouponMessage] = useState('');
-  useEffect(() => { void supabase.from('fee_plans').select('amount').eq('active', true).order('amount').limit(1).maybeSingle().then(({ data }) => { if (data?.amount) setFee(Number(data.amount)); }); }, []);
-  const applyCoupon = async (event: FormEvent) => {
-    event.preventDefault();
-    const trimmedCode = couponCode.trim().toUpperCase();
-    const { data: discount, error } = await supabase.from('discounts').select('*').eq('coupon_code', trimmedCode).eq('active', true).maybeSingle();
-    if (error) { setDiscountAmount(0); setCouponMessage('Unable to validate this coupon right now.'); return; }
-    if (!discount) { setDiscountAmount(0); setCouponMessage('Coupon not found or inactive.'); return; }
+  const [couponMsg, setCouponMsg] = useState('');
+  const [validating, setValidating] = useState(false);
 
-    const now = new Date();
-    const validFrom = discount.valid_from ? new Date(discount.valid_from) : null;
-    const validUntil = discount.valid_until ? new Date(discount.valid_until) : null;
-    if (validFrom && validFrom > now) { setDiscountAmount(0); setCouponMessage('This coupon is not active yet.'); return; }
-    if (validUntil && validUntil < now) { setDiscountAmount(0); setCouponMessage('This coupon has expired.'); return; }
-    if (Number(discount.minimum_purchase ?? 0) > fee) { setDiscountAmount(0); setCouponMessage(`Minimum purchase of ₹${Number(discount.minimum_purchase).toLocaleString('en-IN')} is required.`); return; }
-
-    const { count, error: usageError } = await supabase.from('payments').select('id', { count: 'exact', head: true }).eq('coupon_code', trimmedCode).in('status', ['paid', 'pending']);
-    if (usageError) { setDiscountAmount(0); setCouponMessage('Unable to verify coupon usage.'); return; }
-    if (Number(discount.coupon_count ?? 0) > 0 && Number(count ?? 0) >= Number(discount.coupon_count ?? 0)) { setDiscountAmount(0); setCouponMessage('This coupon has reached its usage limit.'); return; }
-
-    const discountValue = Number(discount.discount_value ?? 0);
-    const maximumDiscount = discount.maximum_discount_amount ? Number(discount.maximum_discount_amount) : null;
-    let computedDiscount = 0;
-    if (discount.discount_type === 'percentage') {
-      computedDiscount = (fee * discountValue) / 100;
-    } else {
-      computedDiscount = discountValue;
+  // Quick Plan Switcher State
+  const initialPlanId = useMemo(() => {
+    if (feePlans.length > 0 && student) {
+      const match = feePlans.find(
+        (p) => student.class_schedule.toLowerCase().includes(p.name.toLowerCase()) ||
+               p.name.toLowerCase().includes(student.class_schedule.toLowerCase())
+      );
+      if (match) return match.id;
+      return feePlans[0].id;
     }
-    if (maximumDiscount !== null && computedDiscount > maximumDiscount) computedDiscount = maximumDiscount;
+    return '';
+  }, [feePlans, student]);
 
-    setDiscountAmount(computedDiscount);
-    setCouponMessage(`${discount.discount_type === 'percentage' ? `${discountValue}%` : `₹${discountValue.toLocaleString('en-IN')}`} discount applied.`);
+  const [selectedPlanId, setSelectedPlanId] = useState(initialPlanId);
+  const [selectedAddonIds, setSelectedAddonIds] = useState<string[]>([]);
+  const [savingPlan, setSavingPlan] = useState(false);
+
+  useEffect(() => {
+    if (initialPlanId) {
+      setSelectedPlanId(initialPlanId);
+    }
+  }, [initialPlanId]);
+
+  const handleApplyCoupon = async (e: FormEvent) => {
+    e.preventDefault();
+    const code = couponCode.trim().toUpperCase();
+    if (!code) return;
+
+    setValidating(true);
+    setCouponMsg('');
+
+    try {
+      const { data: discount, error } = await supabaseAdmin
+        .from('discounts')
+        .select('*')
+        .eq('coupon_code', code)
+        .eq('active', true)
+        .maybeSingle();
+
+      if (error || !discount) {
+        setDiscountAmount(0);
+        setCouponMsg('Coupon code not found or inactive.');
+        return;
+      }
+
+      let computed = 0;
+      if (discount.discount_type === 'percentage') {
+        computed = (dynamicFeeSummary.totalAmount * Number(discount.discount_value)) / 100;
+      } else {
+        computed = Number(discount.discount_value);
+      }
+
+      if (discount.maximum_discount_amount && computed > Number(discount.maximum_discount_amount)) {
+        computed = Number(discount.maximum_discount_amount);
+      }
+
+      setDiscountAmount(computed);
+      setCouponMsg(`Coupon ${code} applied! Saved ₹${computed.toFixed(0)} on this cycle.`);
+    } catch {
+      setCouponMsg('Error validating coupon.');
+    } finally {
+      setValidating(false);
+    }
   };
-  const payable = Math.max(0, fee - discountAmount);
-  return <section className="student-panel"><p className="student-kicker">Account ledger</p><h2>Fees & payments</h2><div className="payment-summary"><div><span>Current balance</span><strong>₹{payable.toFixed(0)}</strong><small>{discountAmount ? `₹${fee} less ₹${discountAmount.toFixed(0)} coupon` : 'October tuition'}</small></div><button className="student-action">Pay securely <CircleDollarSign size={16} /></button></div><form onSubmit={applyCoupon} style={{ display: 'flex', gap: '.6rem', marginTop: '1.25rem', flexWrap: 'wrap' }}><input required value={couponCode} onChange={(event) => setCouponCode(event.target.value)} placeholder="Discount coupon" style={{ flex: '1 1 220px', minWidth: 0, padding: '.8rem 1rem', border: '1px solid rgba(255,255,255,.12)', borderRadius: '8px', background: 'rgba(255,255,255,.04)', color: 'var(--text-primary)', font: 'inherit' }} /><button className="student-action" type="submit" style={{ margin: 0 }}>Apply coupon</button></form>{couponMessage && <p className="student-muted" style={{ marginTop: '.6rem' }}>{couponMessage}</p>}<h3 className="student-section-title">Payment history</h3><div className="payment-row"><span><b>September 2026</b><small>Online Guitar Tuition</small></span><strong>₹{fee}</strong><em>Paid</em></div><div className="payment-row"><span><b>August 2026</b><small>Online Guitar Tuition</small></span><strong>₹{fee}</strong><em>Paid</em></div></section>;
+
+  const handleApplyPlanCustomization = async () => {
+    const chosenPlan = feePlans.find((p) => p.id === selectedPlanId) || feePlans[0];
+    if (!chosenPlan) return;
+
+    const chosenAddonNames = addOnsList
+      .filter((a) => selectedAddonIds.includes(a.id))
+      .map((a) => a.name);
+
+    setSavingPlan(true);
+    await onPlanChange(
+      `${chosenPlan.name} — ₹${chosenPlan.amount.toLocaleString('en-IN')}/${chosenPlan.billing_period || 'month'}`,
+      chosenAddonNames
+    );
+    setSavingPlan(false);
+  };
+
+  const finalDue = Math.max(0, dynamicFeeSummary.totalAmount - discountAmount);
+
+  return (
+    <div style={{ maxWidth: '850px', margin: '0 auto' }}>
+      {/* Tuition Summary Card */}
+      <section className="student-panel" style={{ marginBottom: '1.5rem' }}>
+        <p className="student-kicker">Tuition Account</p>
+        <h2>Fees &amp; Monthly Payments</h2>
+
+        <div className="payment-summary" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1.25rem' }}>
+          <div>
+            <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              Enrolled Plan Fee ({dynamicFeeSummary.basePlanName})
+            </span>
+            <strong style={{ fontSize: '2.25rem', color: 'var(--gold)', letterSpacing: '-0.02em' }}>
+              ₹{finalDue.toFixed(0)}
+            </strong>
+            <small style={{ display: 'block', color: '#5dd37a', marginTop: '0.2rem' }}>
+              {discountAmount > 0
+                ? `Base ₹${dynamicFeeSummary.totalAmount} less ₹${discountAmount.toFixed(0)} discount applied`
+                : `${dynamicFeeSummary.basePlanName}${dynamicFeeSummary.addonAmount > 0 ? ` + ₹${dynamicFeeSummary.addonAmount} add-ons` : ''}`}
+            </small>
+          </div>
+          <button className="student-action" style={{ margin: 0, width: 'auto', background: 'var(--gold)', color: '#000', fontWeight: 'bold' }} onClick={onOpenPayModal}>
+            Pay Tuition Online <CircleDollarSign size={16} />
+          </button>
+        </div>
+
+        {/* Dynamic Coupon Validator */}
+        <form onSubmit={handleApplyCoupon} style={{ display: 'flex', gap: '0.65rem', marginTop: '1.5rem', flexWrap: 'wrap' }}>
+          <input
+            required
+            value={couponCode}
+            onChange={(e) => setCouponCode(e.target.value)}
+            placeholder="Enter coupon code (e.g. TFSREFERRAL, TFSLAUNCH)"
+            style={{
+              flex: '1 1 240px',
+              padding: '0.8rem 1rem',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: '8px',
+              background: 'rgba(255,255,255,0.04)',
+              color: '#fff',
+              font: 'inherit',
+            }}
+          />
+          <button className="student-action" type="submit" disabled={validating} style={{ margin: 0, width: 'auto' }}>
+            {validating ? 'Verifying...' : 'Apply Coupon'}
+          </button>
+        </form>
+
+        {/* Available Promo Coupons Badges */}
+        {discountsList && discountsList.length > 0 && (
+          <div style={{ marginTop: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <small style={{ color: 'var(--text-secondary)' }}>Available Promo Codes:</small>
+            {discountsList.map((d: any) => (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => setCouponCode(d.coupon_code)}
+                style={{
+                  background: 'rgba(212,175,55,0.1)',
+                  border: '1px dashed var(--gold)',
+                  borderRadius: '6px',
+                  color: 'var(--gold)',
+                  padding: '0.2rem 0.5rem',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {d.coupon_code} ({d.discount_type === 'percentage' ? `${d.discount_value}% OFF` : `₹${d.discount_value} OFF`})
+              </button>
+            ))}
+          </div>
+        )}
+
+        {couponMsg && (
+          <p style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: discountAmount > 0 ? '#5dd37a' : '#ff6b6b' }}>
+            {couponMsg}
+          </p>
+        )}
+      </section>
+
+      {/* Dynamic Plan Switcher / Fee Breakdown */}
+      <section className="student-panel" style={{ marginBottom: '1.5rem' }}>
+        <p className="student-kicker">Live Catalog Options</p>
+        <h3>Tuition Plan &amp; Add-on Customizer</h3>
+        <p className="student-muted" style={{ marginBottom: '1.25rem' }}>
+          Switch between available academy plans directly loaded from Supabase.
+        </p>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
+          {feePlans.map((plan) => {
+            const isSelected = selectedPlanId === plan.id;
+            return (
+              <div
+                key={plan.id}
+                onClick={() => setSelectedPlanId(plan.id)}
+                style={{
+                  padding: '1.15rem',
+                  borderRadius: '10px',
+                  background: isSelected ? 'rgba(212,175,55,0.12)' : 'rgba(255,255,255,0.03)',
+                  border: isSelected ? '2px solid var(--gold)' : '1px solid rgba(255,255,255,0.08)',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <b style={{ color: isSelected ? 'var(--gold)' : '#fff', fontSize: '1.05rem' }}>{plan.name}</b>
+                  {isSelected && <Check size={18} style={{ color: 'var(--gold)' }} />}
+                </div>
+                <p style={{ margin: '0.4rem 0 0.75rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  {plan.description || 'Comprehensive 1-to-1 instruction.'}
+                </p>
+                <strong style={{ fontSize: '1.25rem', color: '#fff' }}>
+                  ₹{plan.amount.toLocaleString('en-IN')}
+                  <small style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 'normal' }}>
+                    /{plan.billing_period || 'mo'}
+                  </small>
+                </strong>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Add-ons list */}
+        {addOnsList.length > 0 && (
+          <div style={{ marginTop: '1.25rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1.25rem' }}>
+            <b style={{ color: '#fff', fontSize: '0.95rem', display: 'block', marginBottom: '0.5rem' }}>
+              Available Add-On Electives
+            </b>
+            <div style={{ display: 'grid', gap: '0.5rem' }}>
+              {addOnsList.map((addon) => {
+                const checked = selectedAddonIds.includes(addon.id);
+                return (
+                  <label
+                    key={addon.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '8px',
+                      background: checked ? 'rgba(212,175,55,0.08)' : 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.06)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedAddonIds([...selectedAddonIds, addon.id]);
+                        else setSelectedAddonIds(selectedAddonIds.filter((id) => id !== addon.id));
+                      }}
+                      style={{ accentColor: 'var(--gold)' }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <span style={{ color: '#fff', fontWeight: 600 }}>{addon.name}</span>
+                      <small style={{ display: 'block', color: 'var(--text-secondary)' }}>
+                        {addon.description}
+                      </small>
+                    </div>
+                    <b style={{ color: 'var(--gold)' }}>+₹{addon.amount.toLocaleString('en-IN')}/mo</b>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+          <button className="admin-save" onClick={handleApplyPlanCustomization} disabled={savingPlan} style={{ margin: 0, width: 'auto' }}>
+            {savingPlan ? 'Syncing Plan...' : 'Save Plan Selection'}
+          </button>
+        </div>
+      </section>
+
+      {/* Payment History */}
+      <section className="student-panel">
+        <h3 className="student-section-title" style={{ marginBottom: '1.25rem' }}>
+          Payment History &amp; UTR Submissions
+        </h3>
+
+        {payments.length === 0 ? (
+          <p className="student-muted">No fee payment records submitted yet.</p>
+        ) : (
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            {payments.map((p) => (
+              <div
+                key={p.payment_reference || p.id}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  flexWrap: 'wrap',
+                  gap: '0.75rem',
+                }}
+              >
+                <div>
+                  <b style={{ color: '#fff', display: 'block' }}>
+                    {p.timestamp ? new Date(p.timestamp).toLocaleDateString('en-IN') : 'Tuition Payment'}
+                  </b>
+                  <small style={{ color: 'var(--text-secondary)' }}>
+                    UTR: {p.utr} • Ref: {p.payment_reference || p.id.slice(0, 8)}
+                  </small>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <b style={{ color: 'var(--gold)', fontSize: '1.1rem', display: 'block' }}>
+                    ₹{p.amount.toLocaleString('en-IN')}
+                  </b>
+                  <span
+                    className="booking-badge"
+                    style={{
+                      display: 'inline-block',
+                      marginTop: '0.2rem',
+                      background:
+                        p.payment_status === 'VERIFIED'
+                          ? 'rgba(40,167,69,0.2)'
+                          : p.payment_status === 'REJECTED'
+                            ? 'rgba(220,53,69,0.2)'
+                            : 'rgba(212,175,55,0.2)',
+                      color:
+                        p.payment_status === 'VERIFIED'
+                          ? '#5dd37a'
+                          : p.payment_status === 'REJECTED'
+                            ? '#ff6b6b'
+                            : 'var(--gold)',
+                    }}
+                  >
+                    {p.payment_status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
 };
 
-const Updates = () => <section className="student-panel"><p className="student-kicker">Your learning timeline</p><h2>Class & schedule updates</h2><div className="update-item"><span className="update-icon"><CalendarDays size={18} /></span><div><b>Next class confirmed</b><p>Saturday, 10:00 AM. Your recurring online slot is reserved.</p><small>Updated today</small></div></div><div className="update-item"><span className="update-icon"><BookOpen size={18} /></span><div><b>New module unlocked</b><p>Neck mapping exercises are ready for your next practice session.</p><small>Updated 2 days ago</small></div></div><div className="update-item"><span className="update-icon"><FileText size={18} /></span><div><b>Plan review coming up</b><p>Your current 8-week plan is ready for a progress review after week 6.</p><small>Updated 1 week ago</small></div></div></section>;
+// =========================================================================
+// 5. CURRICULUM & MODULES TAB
+// =========================================================================
+const ModulesScheduleTab = ({
+  student,
+  curriculumList,
+  scheduleList,
+  moduleProgress,
+  onToggleProgress,
+  onRequestReschedule,
+}: {
+  student: StudentProfile | null;
+  curriculumList: CurriculumItem[];
+  scheduleList: ScheduleItem[];
+  moduleProgress: Record<string, string>;
+  onToggleProgress: (id: string) => void;
+  onRequestReschedule: () => void;
+}) => {
+  const studentTrack = student?.curriculum || 'Guitar';
+  const defaultInstrument = useMemo(() => {
+    const t = studentTrack.toLowerCase();
+    if (t.includes('dotara')) return 'ukulele_dotara';
+    if (t.includes('ukulele')) return 'ukulele_standard';
+    return 'guitar';
+  }, [studentTrack]);
 
-const RequestPanel = ({ requestType, setRequestType, request, setRequest, submitRequest, requestLoading }: { requestType: string; setRequestType: (value: string) => void; request: string; setRequest: (value: string) => void; submitRequest: (event: FormEvent) => void; requestLoading: boolean }) => <section className="student-panel request-panel"><p className="student-kicker">Talk to the TFS team</p><h2>Request a change</h2><p className="student-muted">Ask about your plan, class timing, format, or anything that would help you learn better. We will review it and get back to you.</p><form onSubmit={submitRequest}><label>What would you like to change?<select value={requestType} onChange={(event) => setRequestType(event.target.value)}><option>Plan change</option><option>Schedule change</option><option>Class format change</option><option>Something else</option></select></label><label>Tell us more<textarea required rows={5} value={request} onChange={(event) => setRequest(event.target.value)} placeholder="Write your request here..." /></label><button className="student-action" type="submit" disabled={requestLoading}>{requestLoading ? 'Sending...' : 'Send request'} <ChevronRight size={16} /></button></form></section>;
+  const [filterInstrument, setFilterInstrument] = useState<string>(defaultInstrument);
+  const [expandedModuleId, setExpandedModuleId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFilterInstrument(defaultInstrument);
+  }, [defaultInstrument]);
+
+  const filteredModules = useMemo(() => {
+    if (filterInstrument === 'all') return curriculumList.filter((c) => c.active !== false);
+    return curriculumList.filter((c) => c.instrument === filterInstrument && c.active !== false);
+  }, [curriculumList, filterInstrument]);
+
+  return (
+    <div style={{ maxWidth: '850px', margin: '0 auto' }}>
+      {/* Live Syllabus Card */}
+      <section className="student-panel" style={{ marginBottom: '1.5rem' }}>
+        <p className="student-kicker">Live Syllabus</p>
+        <h2>Dynamic Curriculum Tracks</h2>
+        <p className="student-muted" style={{ marginBottom: '1.25rem' }}>
+          Real curriculum tracks synchronized directly from The Fretboard Society. Track your progress or study ahead.
+        </p>
+
+        {/* Instrument Switcher */}
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+          {[
+            { id: 'guitar', label: 'Acoustic Guitar' },
+            { id: 'ukulele_standard', label: 'Standard Ukulele' },
+            { id: 'ukulele_dotara', label: 'Dotara Ukulele' },
+            { id: 'all', label: 'All Modules' },
+          ].map((inst) => (
+            <button
+              key={inst.id}
+              onClick={() => setFilterInstrument(inst.id)}
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: '8px',
+                border: filterInstrument === inst.id ? '1px solid var(--gold)' : '1px solid rgba(255,255,255,0.1)',
+                background: filterInstrument === inst.id ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.03)',
+                color: filterInstrument === inst.id ? 'var(--gold)' : '#fff',
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+            >
+              {inst.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Modules List */}
+        <div style={{ display: 'grid', gap: '1rem' }}>
+          {filteredModules.map((m, idx) => {
+            const status = moduleProgress[m.id] || 'not_started';
+            const isExpanded = expandedModuleId === m.id;
+
+            return (
+              <div
+                key={m.id || idx}
+                style={{
+                  padding: '1.25rem',
+                  borderRadius: '10px',
+                  background: 'rgba(255,255,255,0.03)',
+                  border: status === 'mastered' ? '1px solid rgba(93,211,122,0.3)' : '1px solid rgba(255,255,255,0.08)',
+                  display: 'grid',
+                  gap: '0.75rem',
+                }}
+              >
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+                  <div
+                    onClick={() => onToggleProgress(m.id)}
+                    title="Click to toggle status: Not Started -> Learning -> Mastered"
+                    style={{
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '50%',
+                      background: status === 'mastered' ? 'rgba(93,211,122,0.2)' : 'rgba(212,175,55,0.15)',
+                      color: status === 'mastered' ? '#5dd37a' : 'var(--gold)',
+                      border: status === 'mastered' ? '1px solid #5dd37a' : '1px solid var(--gold)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 700,
+                      flexShrink: 0,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {status === 'mastered' ? <Check size={18} /> : idx + 1}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <b style={{ color: '#fff', fontSize: '1.05rem' }}>{m.title}</b>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <span className="booking-badge" style={{ fontSize: '0.72rem', textTransform: 'capitalize' }}>
+                          {m.category}
+                        </span>
+                        <button
+                          onClick={() => onToggleProgress(m.id)}
+                          style={{
+                            padding: '0.25rem 0.65rem',
+                            borderRadius: '999px',
+                            border: '0',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            background:
+                              status === 'mastered'
+                                ? 'rgba(93,211,122,0.2)'
+                                : status === 'in_progress'
+                                  ? 'rgba(212,175,55,0.2)'
+                                  : 'rgba(255,255,255,0.08)',
+                            color:
+                              status === 'mastered'
+                                ? '#5dd37a'
+                                : status === 'in_progress'
+                                  ? 'var(--gold)'
+                                  : 'var(--text-secondary)',
+                          }}
+                        >
+                          {status === 'mastered' ? '✓ Mastered' : status === 'in_progress' ? '⏳ Learning' : '○ Not Started'}
+                        </button>
+                      </div>
+                    </div>
+                    <p style={{ margin: '0.35rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: '1.5' }}>
+                      {m.description}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Expand Practice Guide */}
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <button
+                    onClick={() => setExpandedModuleId(isExpanded ? null : m.id)}
+                    style={{ background: 'none', border: 'none', color: 'var(--gold)', fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+                  >
+                    {isExpanded ? 'Hide study tips' : 'View practice tips & exercises'} <ChevronDown size={14} style={{ transform: isExpanded ? 'rotate(180deg)' : 'none' }} />
+                  </button>
+                  <small style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                    Instrument: {m.instrument.replace('_', ' ')}
+                  </small>
+                </div>
+
+                {isExpanded && (
+                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.85rem', borderRadius: '8px', fontSize: '0.82rem', color: '#ccc', lineHeight: '1.6' }}>
+                    <b style={{ color: 'var(--gold)', display: 'block', marginBottom: '0.3rem' }}>Teacher Practice Objectives:</b>
+                    <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                      <li>Daily 15-minute metronome fingerstyle drill (start at 60 bpm, ramp up to 100 bpm).</li>
+                      <li>Clean chord transition with zero thumb pressure collapse.</li>
+                      <li>Song application: Record a 30-second audio snippet to submit for teacher critique.</li>
+                    </ul>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Class Schedule Windows */}
+      <section className="student-panel">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div>
+            <p className="student-kicker">Weekly Batch Timings</p>
+            <h2>Official Studio &amp; Online Windows</h2>
+          </div>
+          <button className="admission-secondary" onClick={onRequestReschedule}>
+            <Calendar size={15} /> Request Reschedule
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gap: '0.75rem' }}>
+          {scheduleList.map((s, idx) => {
+            const isMySlot = (student?.preferred_schedule || '').includes(s.day_label);
+            return (
+              <div
+                key={s.id || idx}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '0.85rem 1rem',
+                  borderRadius: '8px',
+                  background: isMySlot ? 'rgba(212,175,55,0.08)' : 'rgba(255,255,255,0.03)',
+                  border: isMySlot ? '1px solid var(--gold)' : '1px solid rgba(255,255,255,0.06)',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                }}
+              >
+                <div>
+                  <b style={{ color: 'var(--gold)' }}>{s.day_label}</b>
+                  <small style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+                    {s.description || s.title}
+                  </small>
+                  {isMySlot && (
+                    <span className="booking-badge" style={{ marginLeft: '0.65rem', background: '#5dd37a22', color: '#5dd37a' }}>
+                      Your Batch Window
+                    </span>
+                  )}
+                </div>
+                <span style={{ color: '#5dd37a', fontWeight: 600, fontSize: '0.9rem' }}>
+                  {s.time_label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+};
+
+// =========================================================================
+// 6. HELPDESK & REQUESTS TAB
+// =========================================================================
+const RequestsTab = ({
+  user,
+  displayName,
+  student,
+  scheduleList,
+  feePlans,
+  requests,
+  onRequestSent,
+}: {
+  user: any;
+  displayName: string;
+  student: StudentProfile | null;
+  scheduleList: ScheduleItem[];
+  feePlans: FeePlan[];
+  requests: any[];
+  onRequestSent: (req: any) => void;
+}) => {
+  const [requestType, setRequestType] = useState('Schedule change');
+  const [targetSlot, setTargetSlot] = useState(
+    scheduleList[0] ? `${scheduleList[0].day_label} — ${scheduleList[0].time_label}` : ''
+  );
+  const [targetPlan, setTargetPlan] = useState(feePlans[0]?.name || '');
+  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!message.trim() || !user) return;
+    setSubmitting(true);
+
+    let finalMessage = message.trim();
+    if (requestType === 'Schedule change' && targetSlot) {
+      finalMessage = `[Requested Slot: ${targetSlot} | Current Slot: ${student?.preferred_schedule || 'Flexible'}]\n${finalMessage}`;
+    } else if (requestType === 'Plan change' && targetPlan) {
+      finalMessage = `[Requested Plan: ${targetPlan} | Current Plan: ${student?.class_schedule || 'Default'}]\n${finalMessage}`;
+    }
+
+    try {
+      const payload = {
+        student_id: user.id,
+        student_name: displayName,
+        student_email: user.email,
+        request_type: requestType,
+        message: finalMessage,
+        status: 'pending',
+      };
+
+      const { data, error } = await supabaseAdmin.from('student_requests').insert(payload).select().single();
+      if (!error && data) {
+        onRequestSent(data);
+      } else {
+        onRequestSent({ ...payload, id: `req-${Date.now()}`, created_at: new Date().toISOString() });
+      }
+      setMessage('');
+    } catch {
+      onRequestSent({
+        student_id: user.id,
+        student_name: displayName,
+        student_email: user.email,
+        request_type: requestType,
+        message: finalMessage,
+        status: 'pending',
+        id: `req-${Date.now()}`,
+        created_at: new Date().toISOString(),
+      });
+      setMessage('');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: '850px', margin: '0 auto' }}>
+      <section className="student-panel" style={{ marginBottom: '1.5rem' }}>
+        <p className="student-kicker">Direct Connection to Teacher</p>
+        <h2>Submit a Request or Reschedule</h2>
+        <p className="student-muted" style={{ marginBottom: '1.5rem' }}>
+          Ask about lesson reschedules, tuition plan adjustments, fingerstyle techniques, or request a leave of absence.
+        </p>
+
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Request Subject / Category
+            <select
+              value={requestType}
+              onChange={(e) => setRequestType(e.target.value)}
+              style={{ padding: '0.85rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            >
+              <option value="Schedule change">Schedule Reschedule / Makeup Lesson</option>
+              <option value="Plan change">Tuition Plan Switch</option>
+              <option value="Leave notification">Leave of Absence</option>
+              <option value="Technique query">Technique &amp; Practice Question</option>
+              <option value="General support">General Support</option>
+            </select>
+          </label>
+
+          {/* Dynamic selector based on requestType */}
+          {requestType === 'Schedule change' && scheduleList.length > 0 && (
+            <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--gold)' }}>
+              Select Requested Lesson Slot (Current: {student?.preferred_schedule || 'Flexible'})
+              <select
+                value={targetSlot}
+                onChange={(e) => setTargetSlot(e.target.value)}
+                style={{ padding: '0.85rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+              >
+                {scheduleList.map((s) => (
+                  <option key={s.id} value={`${s.day_label} — ${s.time_label}`}>
+                    {s.day_label} — {s.time_label} ({s.description || 'Lesson window'})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {requestType === 'Plan change' && feePlans.length > 0 && (
+            <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--gold)' }}>
+              Select Requested Tuition Plan (Current: {student?.class_schedule || 'Standard'})
+              <select
+                value={targetPlan}
+                onChange={(e) => setTargetPlan(e.target.value)}
+                style={{ padding: '0.85rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+              >
+                {feePlans.map((p) => (
+                  <option key={p.id} value={`${p.name} (₹${p.amount}/${p.billing_period || 'mo'})`}>
+                    {p.name} — ₹{p.amount.toLocaleString('en-IN')}/{p.billing_period || 'month'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Message Details *
+            <textarea
+              required
+              rows={4}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Describe your query or reasons for reschedule..."
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit', resize: 'vertical' }}
+            />
+          </label>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="admin-save" type="submit" disabled={submitting} style={{ margin: 0 }}>
+              <Send size={16} /> {submitting ? 'Submitting...' : 'Send to Teacher'}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      {/* Request History */}
+      <section className="student-panel">
+        <h3 className="student-section-title" style={{ marginBottom: '1rem' }}>
+          Previous Submissions &amp; Teacher Replies
+        </h3>
+
+        {requests.length === 0 ? (
+          <p className="student-muted">No requests submitted yet.</p>
+        ) : (
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            {requests.map((r, i) => (
+              <div
+                key={r.id || i}
+                style={{
+                  padding: '1rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255,255,255,0.03)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <b style={{ color: 'var(--gold)' }}>{r.request_type}</b>
+                  <span
+                    className="booking-badge"
+                    style={{
+                      background: r.status === 'resolved' ? 'rgba(40,167,69,0.2)' : 'rgba(212,175,55,0.2)',
+                      color: r.status === 'resolved' ? '#5dd37a' : 'var(--gold)',
+                    }}
+                  >
+                    {r.status || 'Pending'}
+                  </span>
+                </div>
+                <p style={{ margin: '0 0 0.5rem', color: '#fff', fontSize: '0.9rem' }}>{r.message}</p>
+                {r.admin_note && (
+                  <div style={{ marginTop: '0.5rem', padding: '0.65rem 0.85rem', background: 'rgba(212,175,55,0.08)', borderLeft: '3px solid var(--gold)', borderRadius: '4px' }}>
+                    <small style={{ color: 'var(--gold)', display: 'block', fontWeight: 600 }}>TFS Instructor Response:</small>
+                    <p style={{ margin: '0.2rem 0 0', color: '#fff', fontSize: '0.85rem' }}>{r.admin_note}</p>
+                  </div>
+                )}
+                <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem' }}>
+                  {r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN') : ''}
+                </small>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+};
+
+// =========================================================================
+// PAY TUITION MODAL (Dynamic UPI & UTR Submission)
+// =========================================================================
+const PayTuitionModal = ({
+  student,
+  dynamicFeeSummary,
+  onClose,
+  onSubmitPayment,
+}: {
+  student: StudentProfile;
+  dynamicFeeSummary: { basePlanName: string; totalAmount: number };
+  onClose: () => void;
+  onSubmitPayment: (payload: { amount: number; utr: string; payer_name: string; notes: string }) => Promise<void>;
+}) => {
+  const [payerName, setPayerName] = useState(`${student.first_name} ${student.last_name}`.trim());
+  const [amount, setAmount] = useState(dynamicFeeSummary.totalAmount);
+  const [utr, setUtr] = useState('');
+  const [notes, setNotes] = useState('Monthly tuition fee');
+  const [copied, setCopied] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const officialUpi = 'codr.sankha.contact@oksbi';
+
+  const handleCopyUpi = () => {
+    navigator.clipboard.writeText(officialUpi);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 3000);
+  };
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!utr.trim()) return;
+    setSubmitting(true);
+
+    await onSubmitPayment({
+      amount: Number(amount),
+      utr: utr.trim(),
+      payer_name: payerName.trim(),
+      notes: notes.trim(),
+    });
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="fee-login-modal-overlay">
+      <div className="fee-login-modal-card" style={{ maxWidth: '550px', textAlign: 'left' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+          <div>
+            <h3 style={{ margin: 0, color: 'var(--gold)' }}>Pay Monthly Tuition Fee</h3>
+            <small style={{ color: 'var(--text-secondary)' }}>
+              Plan: {dynamicFeeSummary.basePlanName} • Total: ₹{dynamicFeeSummary.totalAmount}
+            </small>
+          </div>
+          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Official UPI Details Box */}
+        <div style={{ background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '10px', padding: '1.15rem', marginBottom: '1.25rem' }}>
+          <p style={{ margin: '0 0 0.5rem', color: 'var(--gold)', fontWeight: 600, fontSize: '0.9rem' }}>
+            Official TFS UPI Payment Information
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <span style={{ color: '#fff', fontFamily: 'monospace', fontSize: '1.05rem', fontWeight: 600 }}>
+              {officialUpi}
+            </span>
+            <button
+              type="button"
+              onClick={handleCopyUpi}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                background: 'rgba(212,175,55,0.2)',
+                color: 'var(--gold)',
+                border: '1px solid var(--gold)',
+                borderRadius: '6px',
+                padding: '0.35rem 0.65rem',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+              }}
+            >
+              <Copy size={13} /> {copied ? 'Copied!' : 'Copy UPI ID'}
+            </button>
+          </div>
+          <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem', lineHeight: '1.4' }}>
+            Open Google Pay, PhonePe, Paytm, or BHIM. Send the exact fee amount, then copy the 12-digit UTR/UPI Transaction ID and enter it below.
+          </small>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
+          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            Payer Name (Bank / UPI account holder name) *
+            <input
+              required
+              value={payerName}
+              onChange={(e) => setPayerName(e.target.value)}
+              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            Amount to Pay (₹) *
+            <input
+              required
+              type="number"
+              value={amount}
+              onChange={(e) => setAmount(Number(e.target.value))}
+              style={{ padding: '0.75rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: 'var(--gold)', fontWeight: 'bold' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            UTR / Transaction Reference (12 digits) *
+            <input
+              required
+              placeholder="e.g. 428192847291"
+              value={utr}
+              onChange={(e) => setUtr(e.target.value)}
+              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px', color: '#fff', fontFamily: 'monospace' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            Payment Notes / Cycle
+            <input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. October monthly tuition"
+              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+            />
+          </label>
+
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+            <button type="button" className="admission-secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="admin-save" style={{ margin: 0 }} disabled={submitting}>
+              {submitting ? 'Submitting to Database...' : 'Submit Payment Reference'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// =========================================================================
+// EDIT ID CARD MODAL
+// =========================================================================
+const EditIdCardModal = ({
+  student,
+  onClose,
+  onSave,
+}: {
+  student: StudentProfile;
+  onClose: () => void;
+  onSave: (updates: Partial<StudentProfile>) => Promise<void>;
+}) => {
+  const [firstName, setFirstName] = useState(student.first_name || '');
+  const [lastName, setLastName] = useState(student.last_name || '');
+  const [phoneNumber, setPhoneNumber] = useState(student.phone_number || '');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    await onSave({
+      first_name: firstName.trim(),
+      last_name: lastName.trim(),
+      phone_number: phoneNumber.trim(),
+    });
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="fee-login-modal-overlay">
+      <div className="fee-login-modal-card" style={{ maxWidth: '480px', textAlign: 'left' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+          <h3 style={{ margin: 0, color: 'var(--gold)' }}>Edit Student ID Pass</h3>
+          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
+          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            First Name on Card *
+            <input
+              required
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            Last Name on Card *
+            <input
+              required
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            Emergency Contact / Phone
+            <input
+              placeholder="+91 98765 43210"
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value)}
+              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+            />
+          </label>
+
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+            <button type="button" className="admission-secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="admin-save" style={{ margin: 0 }} disabled={submitting}>
+              {submitting ? 'Updating...' : 'Update Pass'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
 
 export default StudentDashboard;

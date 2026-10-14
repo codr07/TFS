@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { jsPDF } from 'jspdf';
+import { saveAdmissionLocally, submitAdmissionToSpreadsheet } from '../lib/tfsData';
 
 type AdmissionData = {
   name: string;
@@ -301,27 +302,49 @@ const AdmissionForm = () => {
     setError('');
     try {
       const generatedAdmissionId = `TFS-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${paymentReference.slice(-5)}`;
-      const apiUrl = import.meta.env.VITE_ADMISSION_API_URL as string | undefined;
-      if (apiUrl) {
-        const formData = new URLSearchParams();
-        Object.entries({
-          ...data,
-          addons: data.addons.join(', '),
-          paymentReference,
-          applicationDate,
-          monthlyFee: `₹${totalMonthlyFee}/month`,
-          paymentAmount,
-        })
-          .forEach(([key, value]) => formData.append(key, String(value)));
-        await fetch(apiUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          body: formData,
-        });
-        setAdmissionId(generatedAdmissionId);
-      } else {
-        setAdmissionId(generatedAdmissionId);
-      }
+      setAdmissionId(generatedAdmissionId);
+
+      const cleanPhone = data.phone.replace(/\D/g, '').slice(-10);
+
+      const admissionRecord = {
+        id: `adm-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        admission_id: generatedAdmissionId,
+        payment_reference: paymentReference,
+        payment_status: 'PENDING VERIFICATION' as const,
+        utr: data.utr.trim(),
+        payer_name: data.payerName.trim(),
+        student_name: data.name.trim(),
+        phone: cleanPhone,
+        email: data.email.trim(),
+        address: data.address.trim(),
+        profession: data.profession.trim(),
+        curriculum: data.curriculum,
+        class_type: data.classType,
+        addons: data.addons.join(', '),
+        schedule: data.schedule,
+        admission_fee: ADMISSION_FEE,
+        base_tuition_fee: monthlyFee,
+        addon_fee: addonFee,
+        total_monthly_fee: `₹${totalMonthlyFee}/month`,
+        payment_amount: paymentAmount,
+      };
+
+      // Always save locally so no submission is lost
+      await saveAdmissionLocally(admissionRecord);
+
+      // Send to Google Sheet
+      await submitAdmissionToSpreadsheet({
+        ...data,
+        phone: cleanPhone,
+        admissionId: generatedAdmissionId,
+        addons: data.addons.join(', '),
+        paymentReference,
+        applicationDate,
+        monthlyFee: `₹${totalMonthlyFee}/month`,
+        paymentAmount,
+      });
+
       goToStep(8);
       await downloadReceipt(generatedAdmissionId);
     } catch (submissionError) {

@@ -1,6 +1,7 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CircleDollarSign, Home, Users, Video } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { loadFeePlans, loadAddOns } from '../lib/tfsData';
 
 type Fee = {
   id?: string;
@@ -62,12 +63,12 @@ const Fees = () => {
 
   useEffect(() => {
     void Promise.all([
-      supabase.from('fee_plans').select('*').eq('active', true).order('sort_order'),
-      supabase.from('add_ons').select('*').eq('active', true).order('sort_order'),
+      loadFeePlans(),
+      loadAddOns(),
       supabase.from('discounts').select('*').eq('active', true).order('valid_until', { ascending: true }),
-    ]).then(([feesResult, addonsResult, discountsResult]) => {
-      if (feesResult.data?.length) setFees(feesResult.data as Fee[]);
-      if (addonsResult.data) setAddons(addonsResult.data as AddOn[]);
+    ]).then(([feesData, addonsData, discountsResult]) => {
+      if (feesData?.length) setFees(feesData as Fee[]);
+      if (addonsData?.length) setAddons(addonsData as AddOn[]);
       if (discountsResult.data) setDiscounts(discountsResult.data as Coupon[]);
     });
   }, []);

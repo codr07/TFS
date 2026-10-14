@@ -5,6 +5,7 @@ import { jsPDF } from 'jspdf';
 import { AlertCircle, Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { saveFeePaymentRecord } from '../lib/tfsData';
 
 type FeeData = {
   name: string;
@@ -191,12 +192,22 @@ const FeePayment = () => {
     if (remaining === 0) { setError('The payment session expired. Generate a new QR.'); setStep(2); return; }
     setSubmitting(true); setError('');
     try {
-      const apiUrl = import.meta.env.VITE_ADMISSION_API_URL as string | undefined;
-      if (apiUrl) {
-        const formData = new URLSearchParams();
-        Object.entries({ name: data.name, phone: data.phone, email: data.email, address: 'Monthly fee payment', profession: 'Existing student', curriculum: data.curriculum, classType: data.classType, addons: data.addons.join(', '), schedule: 'Monthly fee payment', utr: data.utr, payerName: data.payerName, paymentReference, paymentType: 'feePayment', paymentAmount: amount }).forEach(([key, value]) => formData.append(key, String(value)));
-        await fetch(apiUrl, { method: 'POST', mode: 'no-cors', body: formData });
-      }
+      const cleanPhone = (data.phone || '').replace(/\D/g, '').slice(-10);
+      await saveFeePaymentRecord({
+        id: `fee-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        payment_reference: paymentReference,
+        payment_status: 'PENDING VERIFICATION',
+        utr: data.utr.trim(),
+        payer_name: data.payerName.trim(),
+        student_name: data.name.trim(),
+        student_email: data.email.trim(),
+        phone: cleanPhone,
+        curriculum: data.curriculum,
+        class_type: data.classType,
+        addons: data.addons.join(', ') || 'None',
+        amount: amount,
+      });
       setCompleted(true);
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : 'Payment submission failed.');

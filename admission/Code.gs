@@ -69,10 +69,36 @@ function getAdmissions_() {
   };
 }
 
+function doOptions(e) {
+  return ContentService.createTextOutput('')
+    .setMimeType(ContentService.MimeType.TEXT);
+}
+
 function doPost(e) {
   try {
     setupTFS();
-    const payload = e && e.parameter ? e.parameter : {};
+    let payload = e && e.parameter ? Object.assign({}, e.parameter) : {};
+
+    // Also parse e.postData.contents if available (handling json or url-encoded text)
+    if (e && e.postData && e.postData.contents) {
+      try {
+        const parsedJson = JSON.parse(e.postData.contents);
+        payload = Object.assign(parsedJson, payload);
+      } catch (err) {
+        try {
+          const raw = String(e.postData.contents);
+          raw.split('&').forEach(function(pair) {
+            const idx = pair.indexOf('=');
+            if (idx > -1) {
+              const k = decodeURIComponent(pair.slice(0, idx));
+              const v = decodeURIComponent(pair.slice(idx + 1).replace(/\+/g, ' '));
+              if (!payload[k]) payload[k] = v;
+            }
+          });
+        } catch (e2) {}
+      }
+    }
+
     const required = [
       'name', 'phone', 'email', 'address', 'profession',
       'curriculum', 'classType', 'schedule', 'utr', 'payerName'
@@ -83,8 +109,17 @@ function doPost(e) {
       }
     });
 
-    const phone = String(payload.phone).trim();
-    if (!/^[6-9]\d{9}$/.test(phone)) throw new Error('Invalid phone number.');
+    // Clean phone number: remove non-digits and ensure 10-digit format
+    let rawPhone = String(payload.phone || '').replace(/\D/g, '');
+    if (rawPhone.length > 10) rawPhone = rawPhone.slice(-10);
+    if (!/^[6-9]\d{9}$/.test(rawPhone)) {
+      if (rawPhone.length === 10) {
+        // accept 10 digit number if valid length
+      } else {
+        throw new Error('Invalid phone number: ' + payload.phone);
+      }
+    }
+    const phone = rawPhone;
     if (String(payload.utr).trim().length < 6) throw new Error('Invalid UTR.');
 
     const addons = String(payload.addons || '').split(',')
@@ -94,7 +129,7 @@ function doPost(e) {
       calculateAddonFee_(addons);
     const isFeePayment = String(payload.paymentType || '') === 'feePayment';
     const admissionFee = isFeePayment ? 0 : CONFIG.PAYMENT_AMOUNT;
-    const paymentAmount = admissionFee + monthlyFeeAmount;
+    const paymentAmount = Number(payload.paymentAmount) || (admissionFee + monthlyFeeAmount);
     const admissionId = 'TFS-' +
       Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd') +
       '-' + randomToken_(5);
@@ -117,7 +152,7 @@ function doPost(e) {
     ]);
 
     return ContentService
-      .createTextOutput(JSON.stringify({ success: true, admissionId: admissionId }))
+      .createTextOutput(JSON.stringify({ success: true, admissionId: admissionId, spreadsheetUrl: db.spreadsheetUrl }))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     return ContentService

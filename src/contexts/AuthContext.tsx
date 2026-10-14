@@ -75,14 +75,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const fetchRole = async (currentUser: User) => {
     try {
-      const { data: databaseRole, error } = await supabase.rpc('current_user_role');
-      if (error) throw error;
-      const metadataRole = currentUser.app_metadata?.role;
-      setRole(databaseRole === 'admin' || databaseRole === 'student'
-        ? databaseRole
-        : metadataRole === 'admin' || metadataRole === 'student'
-          ? metadataRole
-          : null);
+      let resolvedRole: UserRole = null;
+
+      // 1. Try RPC current_user_role
+      try {
+        const { data: databaseRole } = await supabase.rpc('current_user_role');
+        if (databaseRole === 'admin' || databaseRole === 'student') {
+          resolvedRole = databaseRole;
+        }
+      } catch {}
+
+      // 2. Direct lookup on profiles table
+      if (!resolvedRole) {
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', currentUser.id)
+            .maybeSingle();
+          if (profile?.role === 'admin' || profile?.role === 'student') {
+            resolvedRole = profile.role;
+          }
+        } catch {}
+      }
+
+      // 3. Fallback to app_metadata role
+      if (!resolvedRole) {
+        const metadataRole = currentUser.app_metadata?.role;
+        if (metadataRole === 'admin' || metadataRole === 'student') {
+          resolvedRole = metadataRole;
+        }
+      }
+
+      setRole(resolvedRole);
     } catch (error) {
       console.error('Error fetching role:', error);
       const metadataRole = currentUser.app_metadata?.role;

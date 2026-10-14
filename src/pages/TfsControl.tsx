@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { supabase, supabaseAdmin } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { BookOpen, Calendar, Check, CircleDollarSign, FileText, Guitar, LayoutDashboard, LogOut, MessageSquare, Percent, Pencil, Plus, Puzzle, Reply, Search, Trash2, Users, X } from 'lucide-react';
+import { BookOpen, Calendar, Check, CircleDollarSign, CreditCard, FileText, Guitar, LayoutDashboard, LogOut, MessageSquare, Percent, Pencil, Plus, Puzzle, Reply, Search, Trash2, Users, X } from 'lucide-react';
 
-type Section = 'overview' | 'admissions' | 'bookings' | 'messages' | 'discounts' | 'fees' | 'addons' | 'schedule' | 'curriculum' | 'students';
+type Section = 'overview' | 'admissions' | 'bookings' | 'messages' | 'discounts' | 'fees' | 'addons' | 'schedule' | 'curriculum' | 'students' | 'payments';
 type RecordValue = Record<string, any>;
 type AdmissionFeed = { headers: string[]; rows: string[][]; spreadsheetUrl?: string };
 const navItems: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
@@ -18,6 +18,7 @@ const navItems: { id: Section; label: string; icon: typeof LayoutDashboard }[] =
   { id: 'schedule', label: 'Schedule', icon: Calendar },
   { id: 'curriculum', label: 'Curriculum', icon: BookOpen },
   { id: 'students', label: 'Students', icon: Users },
+  { id: 'payments', label: 'Payments', icon: CreditCard },
 ];
 
 const TfsControl = () => {
@@ -31,6 +32,7 @@ const TfsControl = () => {
   const [curriculumItems, setCurriculumItems] = useState<RecordValue[]>([]);
   const [addons, setAddons] = useState<RecordValue[]>([]);
   const [requests, setRequests] = useState<RecordValue[]>([]);
+  const [payments, setPayments] = useState<RecordValue[]>([]);
   const [admissionFeed, setAdmissionFeed] = useState<AdmissionFeed>({ headers: [], rows: [] });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -78,7 +80,7 @@ const TfsControl = () => {
   const loadData = async () => {
     setLoading(true);
     setError('');
-    const db = supabaseAdmin;
+    const db = supabase;
 
     // Run queries individually so one table error doesn't wipe everything else
     const [
@@ -91,6 +93,7 @@ const TfsControl = () => {
       curriculumResult,
       addonResult,
       requestResult,
+      paymentResult,
     ] = await Promise.all([
       db.from('bookings').select('*').order('created_at', { ascending: false }),
       db.from('student_profiles').select('*').order('created_at', { ascending: false }),
@@ -101,33 +104,13 @@ const TfsControl = () => {
       db.from('curriculum_items').select('*').order('sort_order'),
       db.from('add_ons').select('*').order('sort_order'),
       db.from('student_requests').select('*').order('created_at', { ascending: false }),
+      db.from('payments').select('*').order('created_at', { ascending: false }),
     ]);
 
     // Log any query-level warnings individually — don't fail on a missing optional table
-    const allResults = [bookingResult, studentResult, roleStudentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult];
+    const allResults = [bookingResult, studentResult, roleStudentResult, discountResult, feeResult, scheduleResult, curriculumResult, addonResult, requestResult, paymentResult];
     for (const result of allResults) {
       if (result.error) console.warn('Supabase query warning:', result.error.message);
-    }
-
-    let authStudentUsers: RecordValue[] = [];
-    try {
-      const { data: usersData } = await db.auth.admin.listUsers();
-      if (usersData?.users) {
-        authStudentUsers = usersData.users.filter((u: any) =>
-          u.app_metadata?.role === 'student' ||
-          u.user_metadata?.role === 'student' ||
-          u.role === 'student'
-        ).map((u: any) => ({
-          id: u.id,
-          email: u.email,
-          role: 'student',
-          first_name: u.user_metadata?.first_name || u.user_metadata?.full_name?.split(' ')[0] || u.email?.split('@')[0] || 'Student',
-          last_name: u.user_metadata?.last_name || u.user_metadata?.full_name?.split(' ').slice(1).join(' ') || '',
-          created_at: u.created_at,
-        }));
-      }
-    } catch {
-      // Ignored if auth admin is unavailable
     }
 
     const rawProfiles = studentResult.data || [];
@@ -169,26 +152,6 @@ const TfsControl = () => {
       }
     }
 
-    // 3. auth users with role student
-    for (const au of authStudentUsers) {
-      const existing = studentMap.get(au.id) || Array.from(studentMap.values()).find(s => s.email && au.email && s.email.toLowerCase() === au.email.toLowerCase());
-      if (existing) {
-        if (!existing.email && au.email) existing.email = au.email;
-      } else {
-        studentMap.set(au.id, {
-          id: au.id,
-          first_name: au.first_name,
-          last_name: au.last_name,
-          email: au.email,
-          curriculum: 'Guitar',
-          class_schedule: 'Active Student',
-          status: 'active',
-          created_at: au.created_at,
-          role: 'student',
-        });
-      }
-    }
-
     const mergedStudents = Array.from(studentMap.values());
 
     setBookings(bookingResult.data || []);
@@ -199,6 +162,7 @@ const TfsControl = () => {
     setCurriculumItems(curriculumResult.data || []);
     setAddons(addonResult.data || []);
     setRequests(requestResult.data || []);
+    setPayments(paymentResult.data || []);
     setLoading(false);
 
     try { await loadAdmissions(); } catch (admissionError) { fail(admissionError instanceof Error ? admissionError.message : 'Unable to load admissions.'); }
@@ -213,14 +177,11 @@ const TfsControl = () => {
 
   const remove = async (table: string, id: string, refreshMessage: string) => {
     if (!window.confirm('Delete this record permanently?')) return;
-    const { error: deleteError } = await supabaseAdmin.from(table).delete().eq('id', id);
-    if (deleteError) {
-      const { error: fallbackError } = await supabase.from(table).delete().eq('id', id);
-      if (fallbackError) { fail(deleteError.message); return; }
-    }
+    const { error: deleteError } = await supabase.from(table).delete().eq('id', id);
+    if (deleteError) { fail(deleteError.message); return; }
     if (table === 'student_profiles') {
       try {
-        await supabaseAdmin.from('profiles').delete().eq('id', id);
+        await supabase.from('profiles').delete().eq('id', id);
       } catch {
         // ignore profile cleanup error
       }
@@ -237,11 +198,8 @@ const TfsControl = () => {
     delete payload.role;
     delete payload._roleOnly;
 
-    const result = id ? await supabaseAdmin.from(table).update(payload).eq('id', id) : await supabaseAdmin.from(table).insert(payload);
-    if (result.error) {
-      const fallbackResult = id ? await supabase.from(table).update(payload).eq('id', id) : await supabase.from(table).insert(payload);
-      if (fallbackResult.error) { fail(result.error.message); return; }
-    }
+    const result = id ? await supabase.from(table).update(payload).eq('id', id) : await supabase.from(table).insert(payload);
+    if (result.error) { fail(result.error.message); return; }
 
     if (table === 'student_profiles') {
       const profileSync: RecordValue = {
@@ -251,7 +209,7 @@ const TfsControl = () => {
       if (values.email) profileSync.email = values.email;
       if (id) {
         try {
-          await supabaseAdmin.from('profiles').update(profileSync).eq('id', id);
+          await supabase.from('profiles').update(profileSync).eq('id', id);
         } catch {
           // ignore profile sync error
         }
@@ -273,6 +231,7 @@ const TfsControl = () => {
     {section === 'addons' && <CatalogManager title="Add-ons" table="add_ons" items={addons} fields={['name', 'description', 'amount', 'billing_period', 'sort_order', 'active']} save={saveRecord} remove={remove} />}
     {section === 'schedule' && <CatalogManager title="Class schedule" table="schedule_items" items={scheduleItems} fields={['title', 'description', 'day_label', 'time_label', 'format', 'sort_order', 'active']} save={saveRecord} remove={remove} />}
     {section === 'curriculum' && <CatalogManager title="Curriculum modules" table="curriculum_items" items={curriculumItems} fields={['title', 'description', 'category', 'instrument', 'icon_name', 'sort_order', 'active']} save={saveRecord} remove={remove} />}
+    {section === 'payments' && <Payments payments={payments} students={students} save={saveRecord} remove={remove} />}
   </main></div>;
 };
 
@@ -325,6 +284,8 @@ const CatalogManager = ({ title, table, items, fields, save, remove }: { title: 
 
 const MessageManager = ({ requests, save, remove }: { requests: RecordValue[]; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => { const [editing, setEditing] = useState<RecordValue | null>(null); return <section className="admin-panel"><PanelHeading eyebrow="Student portal requests" title="Student messages" />{editing && <RecordForm title={`Review student message${editing.student_name ? ` · ${editing.student_name}` : ''}`} values={editing} fields={['student_name', 'student_email', 'request_type', 'message', 'status', 'admin_note']} lockedFields={['student_name', 'student_email', 'request_type', 'message']} onCancel={() => setEditing(null)} onSave={async (values) => { await save('student_requests', values, editing.id); setEditing(null); }} />}{requests.length === 0 ? <p className="admin-empty">No student messages yet.</p> : <div className="admin-table">{requests.map((request) => <div className="admin-table-row" key={request.id}><span><b>{request.student_name || 'Student'}</b><small>{request.request_type} · {request.message}</small></span><span>{request.status || 'pending'}</span><span>{request.created_at ? new Date(request.created_at).toLocaleDateString() : '—'}</span><span className="admin-row-actions"><button title="Reply/update" onClick={() => setEditing(request)}><Reply size={15} /></button><button title="Delete message" onClick={() => void remove('student_requests', request.id, 'Message deleted.')}><Trash2 size={15} /></button></span></div>)}</div>}</section>; };
 
-const RecordForm = ({ title, values, fields, lockedFields = [], onCancel, onSave }: { title: string; values: RecordValue; fields: string[]; lockedFields?: string[]; onCancel: () => void; onSave: (values: RecordValue) => Promise<void> }) => { const [form, setForm] = useState(values); const submit = async (event: FormEvent) => { event.preventDefault(); await onSave(form); }; const isNumberField = (field: string) => ['amount', 'discount_value', 'maximum_discount_amount', 'minimum_purchase', 'coupon_count', 'percentage', 'sort_order'].includes(field); const isDateField = (field: string) => field === 'valid_from' || field === 'valid_until'; const inputValue = (field: string, value: unknown): string | number => { if (typeof value === 'number') return value; if (typeof value === 'string') { if (isDateField(field) && value.includes('T')) return value.slice(0, 10); return value; } return ''; }; return <form className="admin-record-form" onSubmit={submit}><div className="admin-form-heading"><h3>{title}</h3><button type="button" onClick={onCancel}><X size={16} /></button></div>{fields.map((field) => <label key={field}>{field.replaceAll('_', ' ')}{field === 'body' || field === 'admin_reply' ? <textarea rows={4} disabled={lockedFields.includes(field)} value={form[field] || ''} onChange={(event) => setForm({ ...form, [field]: event.target.value })} /> : field === 'active' ? <select disabled={lockedFields.includes(field)} value={String(form[field] !== false)} onChange={(event) => setForm({ ...form, [field]: event.target.value === 'true' })}><option value="true">Active</option><option value="false">Paused</option></select> : field === 'discount_type' ? <select disabled={lockedFields.includes(field)} value={form[field] || 'percentage'} onChange={(event) => setForm({ ...form, [field]: event.target.value })}><option value="percentage">Percentage</option><option value="amount">Fixed amount</option></select> : <input required={field !== 'phone' && field !== 'admin_reply'} disabled={lockedFields.includes(field)} type={isDateField(field) ? 'date' : isNumberField(field) ? 'number' : 'text'} step={isNumberField(field) ? '0.01' : undefined} value={inputValue(field, form[field])} onChange={(event) => setForm({ ...form, [field]: event.target.value })} />}</label>)}<button className="admin-save" type="submit"><Check size={17} /> Save record</button></form>; };
+const RecordForm = ({ title, values, fields, lockedFields = [], dropdowns = {}, onCancel, onSave }: { title: string; values: RecordValue; fields: string[]; lockedFields?: string[]; dropdowns?: Record<string, string[]>; onCancel: () => void; onSave: (values: RecordValue) => Promise<void> }) => { const [form, setForm] = useState(values); const submit = async (event: FormEvent) => { event.preventDefault(); await onSave(form); }; const isNumberField = (field: string) => ['amount', 'discount_value', 'maximum_discount_amount', 'minimum_purchase', 'coupon_count', 'percentage', 'sort_order'].includes(field); const isDateField = (field: string) => field === 'valid_from' || field === 'valid_until'; const inputValue = (field: string, value: unknown): string | number => { if (typeof value === 'number') return value; if (typeof value === 'string') { if (isDateField(field) && value.includes('T')) return value.slice(0, 10); return value; } return ''; }; return <form className="admin-record-form" onSubmit={submit}><div className="admin-form-heading"><h3>{title}</h3><button type="button" onClick={onCancel}><X size={16} /></button></div>{fields.map((field) => <label key={field}>{field.replaceAll('_', ' ')}{dropdowns[field] ? <select disabled={lockedFields.includes(field)} value={form[field] || ''} onChange={(event) => setForm({ ...form, [field]: event.target.value })}>{dropdowns[field].map((opt) => <option key={opt} value={opt}>{opt}</option>)}</select> : field === 'body' || field === 'admin_reply' || field === 'message' ? <textarea rows={4} disabled={lockedFields.includes(field)} value={form[field] || ''} onChange={(event) => setForm({ ...form, [field]: event.target.value })} /> : field === 'active' ? <select disabled={lockedFields.includes(field)} value={String(form[field] !== false)} onChange={(event) => setForm({ ...form, [field]: event.target.value === 'true' })}><option value="true">Active</option><option value="false">Paused</option></select> : field === 'discount_type' ? <select disabled={lockedFields.includes(field)} value={form[field] || 'percentage'} onChange={(event) => setForm({ ...form, [field]: event.target.value })}><option value="percentage">Percentage</option><option value="amount">Fixed amount</option></select> : <input required={field !== 'phone' && field !== 'admin_reply' && field !== 'phone_number'} disabled={lockedFields.includes(field)} type={isDateField(field) ? 'date' : isNumberField(field) ? 'number' : 'text'} step={isNumberField(field) ? '0.01' : undefined} value={inputValue(field, form[field])} onChange={(event) => setForm({ ...form, [field]: event.target.value })} />}</label>)}<button className="admin-save" type="submit"><Check size={17} /> Save record</button></form>; };
+
+const Payments = ({ payments, students, save, remove }: { payments: RecordValue[]; students: RecordValue[]; save: (table: string, values: RecordValue, id?: string) => Promise<void>; remove: (table: string, id: string, message: string) => Promise<void> }) => { const [editing, setEditing] = useState<RecordValue | null>(null); const studentName = (studentId: string) => { const s = students.find((x) => x.id === studentId); return s ? `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.email || studentId : studentId; }; return <section className="admin-panel"><PanelHeading eyebrow="Student fee payment records" title="Payments" />{editing ? <RecordForm title={editing.id ? 'Update payment' : 'Record payment'} values={editing} fields={['student_id', 'amount', 'coupon_code', 'billing_period', 'status', 'paid_at']} lockedFields={editing.id ? [] : []} dropdowns={{ status: ['pending', 'paid', 'failed', 'refunded'], billing_period: ['monthly', 'quarterly', 'yearly', 'one-time'] }} onCancel={() => setEditing(null)} onSave={async (values) => { await save('payments', { ...values, amount: Number(values.amount), paid_at: values.status === 'paid' ? (values.paid_at || new Date().toISOString()) : null }, editing.id); setEditing(null); }} /> : <button className="admin-save" onClick={() => setEditing({ student_id: students[0]?.id || '', amount: 900, coupon_code: '', billing_period: 'monthly', status: 'pending', paid_at: null })}><Plus size={17} /> Record payment</button>}{payments.length === 0 ? <p className="admin-empty">No payments recorded yet.</p> : <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Student</span><span>Amount</span><span>Period</span><span>Status</span><span>Date</span><span>Actions</span></div>{payments.map((payment) => <div className="admin-table-row" key={payment.id}><span><b>{studentName(payment.student_id)}</b><small>{payment.coupon_code ? `Coupon: ${payment.coupon_code}` : 'No coupon'}</small></span><span>₹{Number(payment.amount || 0).toLocaleString('en-IN')}</span><span>{payment.billing_period || 'monthly'}</span><span className="booking-badge">{payment.status || 'pending'}</span><span>{payment.paid_at ? new Date(payment.paid_at).toLocaleDateString('en-IN') : payment.created_at ? new Date(payment.created_at).toLocaleDateString('en-IN') : '—'}</span><span className="admin-row-actions"><button title="Edit payment" onClick={() => setEditing(payment)}><Pencil size={15} /></button><button title="Delete payment" onClick={() => void remove('payments', payment.id, 'Payment deleted.')}><Trash2 size={15} /></button></span></div>)}</div>}</section>; };
 
 export default TfsControl;

@@ -27,10 +27,8 @@ import {
   Percent,
   QrCode,
   RefreshCw,
-  Save,
   Send,
   ShieldCheck,
-  Upload,
   UserRound,
   X,
 } from 'lucide-react';
@@ -51,13 +49,13 @@ import {
   loadStudents,
   loadStoredFeePayments,
   fetchFeePayments,
-  optimizeImageFile,
   uploadImageToBucket,
   recordStudentPayment,
   updateStudentSelfProfile,
 } from '../lib/tfsData';
 import { generateStudentIdCardPdf, generateFeeReceiptPdf } from '../lib/pdfGenerator';
 import { askTfsAi } from '../lib/tfsAi';
+import { subscribeToSync, broadcastSync } from '../lib/syncBus';
 
 type StudentTab = 'home' | 'idcard' | 'profile' | 'payments' | 'modules' | 'requests' | 'ai';
 
@@ -185,9 +183,23 @@ export const StudentDashboard = () => {
           status: (spData.status as any) || 'active',
           created_at: spData.created_at || user.created_at || new Date().toISOString(),
           updated_at: spData.updated_at,
-          monthly_fee: matchedFee,
-          fee_status: 'Up to date',
-          addons: [],
+          monthly_fee: spData.monthly_fee !== undefined && spData.monthly_fee !== null ? Number(spData.monthly_fee) : matchedFee,
+          fee_status: spData.fee_status || 'Up to date',
+          fee_due_date: spData.fee_due_date || '',
+          addons: Array.isArray(spData.addons) ? spData.addons : (typeof spData.addons === 'string' ? [spData.addons] : []),
+          profession: spData.profession || '',
+          address: spData.address || '',
+          bio: spData.bio || '',
+          notes: spData.notes || '',
+          emergency_contact: spData.emergency_contact || '',
+          emergency_phone: spData.emergency_phone || '',
+          avatar_url: spData.avatar_url || '',
+          module_progress: spData.module_progress || {},
+          overall_progress_pct: spData.overall_progress_pct ?? 0,
+          instructor_feedback: spData.instructor_feedback || '',
+          milestone_badges: Array.isArray(spData.milestone_badges) ? spData.milestone_badges : [],
+          last_evaluated_at: spData.last_evaluated_at || '',
+          admission_id: spData.admission_id || '',
         };
       } else {
         // Build from auth user & profiles
@@ -230,39 +242,40 @@ export const StudentDashboard = () => {
         loadedProfile = {
           ...loadedProfile,
           ...matchedAdminStudent,
-          first_name: matchedAdminStudent.first_name || loadedProfile.first_name,
-          last_name: matchedAdminStudent.last_name || loadedProfile.last_name,
-          avatar_url: matchedAdminStudent.avatar_url || spData?.avatar_url || (user.user_metadata?.avatar_url as string) || '',
-          monthly_fee: matchedAdminStudent.monthly_fee ?? loadedProfile.monthly_fee,
-          class_schedule: matchedAdminStudent.class_schedule || loadedProfile.class_schedule,
-          curriculum: matchedAdminStudent.curriculum || loadedProfile.curriculum,
-          preferred_schedule: matchedAdminStudent.preferred_schedule || loadedProfile.preferred_schedule,
-          addons: matchedAdminStudent.addons || loadedProfile.addons || [],
-          module_progress: matchedAdminStudent.module_progress || {},
-          overall_progress_pct: matchedAdminStudent.overall_progress_pct ?? 0,
-          instructor_feedback: matchedAdminStudent.instructor_feedback || '',
-          milestone_badges: matchedAdminStudent.milestone_badges || [],
-          bio: matchedAdminStudent.bio || (user.user_metadata?.bio as string) || '',
-          emergency_contact: matchedAdminStudent.emergency_contact || (user.user_metadata?.emergency_contact as string) || '',
-          emergency_phone: matchedAdminStudent.emergency_phone || (user.user_metadata?.emergency_phone as string) || '',
+          first_name: spData?.first_name || matchedAdminStudent.first_name || loadedProfile.first_name,
+          last_name: spData?.last_name || matchedAdminStudent.last_name || loadedProfile.last_name,
+          avatar_url: spData?.avatar_url || matchedAdminStudent.avatar_url || (user.user_metadata?.avatar_url as string) || '',
+          monthly_fee: spData?.monthly_fee !== undefined && spData.monthly_fee !== null ? Number(spData.monthly_fee) : (matchedAdminStudent.monthly_fee ?? loadedProfile.monthly_fee),
+          fee_status: spData?.fee_status || matchedAdminStudent.fee_status || loadedProfile.fee_status,
+          fee_due_date: spData?.fee_due_date || matchedAdminStudent.fee_due_date || loadedProfile.fee_due_date,
+          class_schedule: spData?.class_schedule || matchedAdminStudent.class_schedule || loadedProfile.class_schedule,
+          curriculum: spData?.curriculum || matchedAdminStudent.curriculum || loadedProfile.curriculum,
+          preferred_schedule: spData?.preferred_schedule || matchedAdminStudent.preferred_schedule || loadedProfile.preferred_schedule,
+          addons: (spData?.addons && spData.addons.length > 0) ? spData.addons : (matchedAdminStudent.addons || loadedProfile.addons || []),
+          module_progress: (spData?.module_progress && Object.keys(spData.module_progress).length > 0)
+            ? spData.module_progress
+            : (matchedAdminStudent.module_progress || {}),
+          overall_progress_pct: spData?.overall_progress_pct !== undefined
+            ? spData.overall_progress_pct
+            : (matchedAdminStudent.overall_progress_pct ?? 0),
+          instructor_feedback: spData?.instructor_feedback || matchedAdminStudent.instructor_feedback || '',
+          milestone_badges: (spData?.milestone_badges && spData.milestone_badges.length > 0)
+            ? spData.milestone_badges
+            : (matchedAdminStudent.milestone_badges || []),
+          bio: spData?.bio || matchedAdminStudent.bio || (user.user_metadata?.bio as string) || '',
+          emergency_contact: spData?.emergency_contact || matchedAdminStudent.emergency_contact || (user.user_metadata?.emergency_contact as string) || '',
+          emergency_phone: spData?.emergency_phone || matchedAdminStudent.emergency_phone || (user.user_metadata?.emergency_phone as string) || '',
         };
-      } else if (user.user_metadata?.avatar_url) {
+      } else if (user.user_metadata?.avatar_url && !loadedProfile.avatar_url) {
         loadedProfile.avatar_url = user.user_metadata.avatar_url as string;
       }
 
       setStudent(loadedProfile);
 
-      // Set module progress controlled by admin, with fallback to local store
+      // Set module progress controlled by admin
       let resolvedProgress: Record<string, 'not_started' | 'in_progress' | 'mastered'> = {};
       if (loadedProfile.module_progress && Object.keys(loadedProfile.module_progress).length > 0) {
         resolvedProgress = loadedProfile.module_progress;
-      } else {
-        try {
-          const storedProg = localStorage.getItem(`tfs_progress_${user.id}`);
-          if (storedProg) {
-            resolvedProgress = JSON.parse(storedProg);
-          }
-        } catch {}
       }
       setModuleProgress(resolvedProgress);
 
@@ -338,6 +351,37 @@ export const StudentDashboard = () => {
 
   useEffect(() => {
     void fetchStudentData();
+
+    // 1. Subscribe to real-time sync events from admin and other tabs
+    const unsubscribe = subscribeToSync((event) => {
+      if (['all', 'students', 'payments', 'requests', 'catalogs'].includes(event.entity)) {
+        void fetchStudentData();
+      }
+    });
+
+    // 2. Refetch when tab becomes active or gains focus
+    const onFocus = () => void fetchStudentData();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchStudentData();
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // 3. Periodic fallback poll every 8 seconds
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void fetchStudentData();
+      }
+    }, 8000);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.clearInterval(interval);
+    };
   }, [fetchStudentData]);
 
   // Dynamic calculations for Tuition Fees
@@ -662,6 +706,7 @@ export const StudentDashboard = () => {
             requests={myRequests}
             onRequestSent={(newReq) => {
               setMyRequests([newReq, ...myRequests]);
+              broadcastSync('requests', 'insert', newReq.id);
               notify('Your request has been submitted to your TFS instructor.');
             }}
           />
@@ -1396,7 +1441,6 @@ const StudentIdCardTab = ({
 const ProfileEditTab = ({
   student,
   feePlans,
-  addOnsList,
   scheduleList,
   curriculumList,
   onNavigateToRequests,
@@ -1404,7 +1448,7 @@ const ProfileEditTab = ({
 }: {
   student: StudentProfile;
   feePlans: FeePlan[];
-  addOnsList: AddOn[];
+  addOnsList?: AddOn[];
   scheduleList: ScheduleItem[];
   curriculumList: CurriculumItem[];
   onNavigateToRequests?: () => void;
@@ -1735,8 +1779,6 @@ const ProfileEditTab = ({
 const TuitionPaymentsTab = ({
   student,
   dynamicFeeSummary,
-  feePlans,
-  addOnsList,
   discountsList = [],
   payments,
   onOpenPayModal,
@@ -1750,8 +1792,8 @@ const TuitionPaymentsTab = ({
     totalAmount: number;
     activeAddons: AddOn[];
   };
-  feePlans: FeePlan[];
-  addOnsList: AddOn[];
+  feePlans?: FeePlan[];
+  addOnsList?: AddOn[];
   discountsList?: any[];
   payments: FeePaymentRecord[];
   onOpenPayModal: () => void;
@@ -2061,14 +2103,13 @@ const ModulesScheduleTab = ({
   curriculumList,
   scheduleList,
   moduleProgress,
-  onToggleProgress,
   onRequestReschedule,
 }: {
   student: StudentProfile | null;
   curriculumList: CurriculumItem[];
   scheduleList: ScheduleItem[];
   moduleProgress: Record<string, string>;
-  onToggleProgress: (id: string) => void;
+  onToggleProgress?: (id: string) => void;
   onRequestReschedule: () => void;
 }) => {
   const studentTrack = student?.curriculum || 'Guitar';
@@ -2509,7 +2550,7 @@ const PayTuitionModal = ({
   onSubmitPayment: (payload: { amount: number; utr: string; payer_name: string; notes: string }) => Promise<void>;
 }) => {
   const [payerName, setPayerName] = useState(`${student.first_name} ${student.last_name}`.trim());
-  const [amount, setAmount] = useState(dynamicFeeSummary.totalAmount);
+  const amount = dynamicFeeSummary.totalAmount;
   const [utr, setUtr] = useState('');
   const [notes, setNotes] = useState('Monthly tuition fee');
   const [copied, setCopied] = useState(false);

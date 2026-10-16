@@ -58,10 +58,10 @@ import {
   saveStudent,
   saveStudentProgress,
   deleteStudent,
-  optimizeImageFile,
   uploadImageToBucket,
   isUuid,
   loadStoredAdmissions,
+  fetchAdmissions,
   saveAdmissionLocally,
   deleteAdmissionRecord,
   fetchSpreadsheetAdmissions,
@@ -83,6 +83,7 @@ import {
   PREDEFINED_STUDENT_STATUSES,
   PREDEFINED_FEE_STATUSES,
 } from '../lib/tfsData';
+import { subscribeToSync, broadcastSync } from '../lib/syncBus';
 
 type Section =
   | 'overview'
@@ -191,8 +192,8 @@ const TfsControl = () => {
     }
   };
 
-  const loadAllData = async () => {
-    setLoading(true);
+  const loadAllData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [
         loadedPlans,
@@ -200,12 +201,16 @@ const TfsControl = () => {
         loadedAddons,
         loadedSchedules,
         loadedStudentsList,
+        loadedPayments,
+        loadedAdmissions,
       ] = await Promise.all([
         loadFeePlans(),
         loadCurriculumItems(),
         loadAddOns(),
         loadScheduleItems(),
         loadStudents(),
+        fetchFeePayments(),
+        fetchAdmissions(),
       ]);
 
       setFees(loadedPlans);
@@ -213,15 +218,8 @@ const TfsControl = () => {
       setAddons(loadedAddons);
       setScheduleItems(loadedSchedules);
       setStudents(loadedStudentsList);
-
-      // Admissions & Fee Payments
-      setAdmissions(loadStoredAdmissions());
-      setFeePayments(loadStoredFeePayments());
-      fetchFeePayments().then((remotePayments) => {
-        if (remotePayments && remotePayments.length > 0) {
-          setFeePayments(remotePayments);
-        }
-      }).catch(() => {});
+      setFeePayments(loadedPayments);
+      setAdmissions(loadedAdmissions);
 
       // Fetch bookings, discounts, requests from Supabase if available
       try {
@@ -238,14 +236,43 @@ const TfsControl = () => {
       }
     } catch (err) {
       console.error('Error loading data:', err);
-      fail('Failed to load some data. Displaying local data.');
+      if (!silent) fail('Failed to load some data. Displaying local data.');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     void loadAllData();
+
+    // 1. Subscribe to real-time sync events across all tabs, portals, and devices
+    const unsubscribe = subscribeToSync(() => {
+      void loadAllData(true);
+    });
+
+    // 2. Refetch when window regains focus or tab becomes visible
+    const onFocus = () => void loadAllData(true);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void loadAllData(true);
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // 3. Periodic polling fallback every 8 seconds
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadAllData(true);
+      }
+    }, 8000);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.clearInterval(interval);
+    };
   }, []);
 
   // Sync with Google Sheet
@@ -428,34 +455,38 @@ const TfsControl = () => {
     // Mark admission as VERIFIED
     adm.payment_status = 'VERIFIED';
     await saveAdmissionLocally(adm);
-    setAdmissions([...admissions]);
+    setAdmissions(await fetchAdmissions());
+    broadcastSync('admissions', 'update', adm.admission_id);
+    broadcastSync('students', 'update');
   };
 
   // Update admission status
   const handleUpdateAdmissionStatus = async (adm: AdmissionSubmission, status: 'VERIFIED' | 'REJECTED') => {
     adm.payment_status = status;
     await saveAdmissionLocally(adm);
-    setAdmissions([...admissions]);
+    setAdmissions(await fetchAdmissions());
+    broadcastSync('admissions', 'update', adm.admission_id);
+    broadcastSync('students', 'update');
     notify(`Admission ${adm.admission_id} marked as ${status}.`);
   };
 
   // Fee payment verification
   const handleVerifyFeePayment = async (paymentId: string) => {
     await updateFeePaymentStatus(paymentId, 'VERIFIED');
-    setFeePayments(loadStoredFeePayments());
+    setFeePayments(await fetchFeePayments());
     setStudents(await loadStudents());
     notify('Fee payment marked as VERIFIED and student record updated.');
   };
 
   const handleRejectFeePayment = async (paymentId: string) => {
     await updateFeePaymentStatus(paymentId, 'REJECTED');
-    setFeePayments(loadStoredFeePayments());
+    setFeePayments(await fetchFeePayments());
     notify('Fee payment rejected.');
   };
 
   const handleSavePaymentRecord = async (payment: FeePaymentRecord) => {
     await saveFeePaymentRecord(payment);
-    setFeePayments(loadStoredFeePayments());
+    setFeePayments(await fetchFeePayments());
     setEditingPayment(null);
     setIsAddingPayment(false);
     notify('Fee payment record saved successfully.');
@@ -846,6 +877,7 @@ const TfsControl = () => {
               await supabaseAdmin.from('student_requests').upsert(val);
               const { data } = await supabaseAdmin.from('student_requests').select('*');
               if (data) setRequests(data);
+              broadcastSync('requests', 'update', val.id);
               notify('Message updated.');
             }}
             onDelete={async (id) => {
@@ -859,6 +891,7 @@ const TfsControl = () => {
                       await supabaseAdmin.from('student_requests').delete().eq('student_email', req.student_email);
                     }
                   }
+                  broadcastSync('requests', 'delete', id);
                 } catch (e) {
                   console.warn('Delete message notice:', e);
                 }
@@ -1204,7 +1237,6 @@ const StudentsSection = ({
   onAskDelete,
   onExportStudents,
   onManageProgress,
-  curriculumItems = [],
   feePlans = [],
   addonsList = [],
   scheduleList = [],

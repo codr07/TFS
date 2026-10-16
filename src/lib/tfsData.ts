@@ -1,4 +1,5 @@
 import { supabase, supabaseAdmin } from './supabase';
+import { broadcastSync } from './syncBus';
 
 export function isUuid(val?: string | null): boolean {
   if (!val || typeof val !== 'string') return false;
@@ -258,6 +259,7 @@ export async function saveFeePlan(plan: Partial<FeePlan> & { name: string; amoun
     console.warn('Supabase fee_plans save error:', e);
   }
 
+  broadcastSync('catalogs', 'update', fullPlan.id);
   return fullPlan;
 }
 
@@ -278,6 +280,7 @@ export async function deleteFeePlan(id: string, planName?: string): Promise<void
   } catch (e) {
     console.warn('deleteFeePlan error:', e);
   }
+  broadcastSync('catalogs', 'delete', id);
 }
 
 export async function loadCurriculumItems(): Promise<CurriculumItem[]> {
@@ -323,6 +326,7 @@ export async function saveCurriculumItem(item: Partial<CurriculumItem> & { title
     }
   } catch {}
 
+  broadcastSync('catalogs', 'update', fullItem.id);
   return fullItem;
 }
 
@@ -343,6 +347,7 @@ export async function deleteCurriculumItem(id: string, itemTitle?: string): Prom
   } catch (e) {
     console.warn('deleteCurriculumItem error:', e);
   }
+  broadcastSync('catalogs', 'delete', id);
 }
 
 export async function loadAddOns(): Promise<AddOn[]> {
@@ -383,6 +388,7 @@ export async function saveAddOn(addon: Partial<AddOn> & { name: string; amount: 
       await supabaseAdmin.from('add_ons').insert(insertPayload);
     }
   } catch {}
+  broadcastSync('catalogs', 'update', fullAddon.id);
   return fullAddon;
 }
 
@@ -403,6 +409,7 @@ export async function deleteAddOn(id: string, addonName?: string): Promise<void>
   } catch (e) {
     console.warn('deleteAddOn error:', e);
   }
+  broadcastSync('catalogs', 'delete', id);
 }
 
 export async function loadScheduleItems(): Promise<ScheduleItem[]> {
@@ -442,6 +449,7 @@ export async function saveScheduleItem(item: Partial<ScheduleItem> & { title: st
       await supabaseAdmin.from('schedule_items').insert(insertPayload);
     }
   } catch {}
+  broadcastSync('catalogs', 'update', fullItem.id);
   return fullItem;
 }
 
@@ -462,6 +470,7 @@ export async function deleteScheduleItem(id: string, itemTitle?: string): Promis
   } catch (e) {
     console.warn('deleteScheduleItem error:', e);
   }
+  broadcastSync('catalogs', 'delete', id);
 }
 
 // ----------------- DEFAULT ACTIVE STUDENTS & SEEDING -----------------
@@ -804,27 +813,37 @@ export async function loadStudents(): Promise<StudentProfile[]> {
       if (stored) localProg = JSON.parse(stored);
     } catch {}
 
-    if (!c) return { ...s, module_progress: localProg || s.module_progress };
+    if (!c) {
+      return {
+        ...s,
+        module_progress: (s.module_progress && Object.keys(s.module_progress).length > 0)
+          ? s.module_progress
+          : (localProg || {}),
+      };
+    }
+
     return {
       ...s,
-      preferred_schedule: c.preferred_schedule || s.preferred_schedule,
-      addons: c.addons || s.addons,
-      monthly_fee: c.monthly_fee || s.monthly_fee,
-      profession: c.profession || s.profession,
-      address: c.address || s.address,
-      avatar_url: s.avatar_url || c.avatar_url,
-      bio: s.bio || c.bio,
-      emergency_contact: s.emergency_contact || c.emergency_contact,
-      emergency_phone: s.emergency_phone || c.emergency_phone,
-      admission_id: c.admission_id || s.admission_id,
-      fee_status: c.fee_status || s.fee_status,
-      fee_due_date: c.fee_due_date || s.fee_due_date,
-      notes: c.notes || s.notes,
-      module_progress: s.module_progress && Object.keys(s.module_progress).length > 0 ? s.module_progress : (localProg || c.module_progress),
-      overall_progress_pct: s.overall_progress_pct !== undefined ? s.overall_progress_pct : c.overall_progress_pct,
-      instructor_feedback: s.instructor_feedback || c.instructor_feedback,
-      milestone_badges: s.milestone_badges || c.milestone_badges,
-      last_evaluated_at: s.last_evaluated_at || c.last_evaluated_at,
+      preferred_schedule: s.preferred_schedule || c.preferred_schedule || 'Saturday — 10:00 AM – 1:00 PM',
+      addons: (s.addons && s.addons.length > 0) ? s.addons : (c.addons || []),
+      monthly_fee: s.monthly_fee !== undefined && s.monthly_fee !== null ? s.monthly_fee : (c.monthly_fee ?? 1300),
+      profession: s.profession || c.profession || '',
+      address: s.address || c.address || '',
+      avatar_url: s.avatar_url || c.avatar_url || '',
+      bio: s.bio || c.bio || '',
+      emergency_contact: s.emergency_contact || c.emergency_contact || '',
+      emergency_phone: s.emergency_phone || c.emergency_phone || '',
+      admission_id: s.admission_id || c.admission_id || '',
+      fee_status: s.fee_status || c.fee_status || 'Up to date',
+      fee_due_date: s.fee_due_date || c.fee_due_date || '',
+      notes: s.notes || c.notes || '',
+      module_progress: (s.module_progress && Object.keys(s.module_progress).length > 0)
+        ? s.module_progress
+        : (c.module_progress && Object.keys(c.module_progress).length > 0 ? c.module_progress : (localProg || {})),
+      overall_progress_pct: s.overall_progress_pct !== undefined ? s.overall_progress_pct : (c.overall_progress_pct ?? 0),
+      instructor_feedback: s.instructor_feedback || c.instructor_feedback || '',
+      milestone_badges: (s.milestone_badges && s.milestone_badges.length > 0) ? s.milestone_badges : (c.milestone_badges || []),
+      last_evaluated_at: s.last_evaluated_at || c.last_evaluated_at || '',
     };
   });
 
@@ -1086,6 +1105,7 @@ export async function saveStudent(student: Partial<StudentProfile> & { first_nam
     : [fullStudent, ...current];
 
   setStored('tfs_students', updated);
+  broadcastSync('students', 'update', fullStudent.id);
   return fullStudent;
 }
 
@@ -1172,6 +1192,8 @@ export async function saveStudentProgress(
       console.warn('Could not sync progress to auth user_metadata:', e);
     }
   }
+
+  broadcastSync('students', 'update', studentId);
 }
 
 export async function deleteStudent(id: string, email?: string): Promise<{ success: boolean; error?: string }> {
@@ -1261,6 +1283,8 @@ export async function deleteStudent(id: string, email?: string): Promise<{ succe
     lastError = err.message || String(err);
   }
 
+  broadcastSync('students', 'delete', id);
+
   if (lastError) {
     return { success: true, error: `Removed locally; database notice: ${lastError}` };
   }
@@ -1273,6 +1297,69 @@ export function loadStoredAdmissions(): AdmissionSubmission[] {
   return getStored<AdmissionSubmission[]>('tfs_admissions', []);
 }
 
+export async function fetchAdmissions(): Promise<AdmissionSubmission[]> {
+  const local = loadStoredAdmissions();
+  try {
+    const { data: pendingProfiles, error } = await supabaseAdmin
+      .from('student_profiles')
+      .select('*')
+      .or('status.eq.pending_verification,admission_id.neq.null')
+      .order('created_at', { ascending: false });
+
+    if (!error && pendingProfiles && pendingProfiles.length > 0) {
+      const map = new Map<string, AdmissionSubmission>();
+      local.forEach((a) => map.set(a.admission_id || a.email, a));
+
+      for (const p of pendingProfiles) {
+        const key = p.admission_id || p.email;
+        if (!map.has(key)) {
+          const notesText = p.notes || '';
+          let utr = 'SUBMITTED';
+          let payer = `${p.first_name} ${p.last_name}`.trim();
+          if (notesText.includes('UTR:')) {
+            const parts = notesText.split('|');
+            parts.forEach((part: string) => {
+              if (part.includes('UTR:')) utr = part.replace(/.*UTR:\s*/, '').trim();
+              if (part.includes('Payer:')) payer = part.replace(/.*Payer:\s*/, '').trim();
+            });
+          }
+
+          map.set(key, {
+            id: p.id,
+            timestamp: p.created_at || new Date().toISOString(),
+            admission_id: p.admission_id || `ADM-${p.id.slice(0, 6).toUpperCase()}`,
+            payment_reference: p.admission_id || `TFS-ADM-${p.id.slice(0, 6).toUpperCase()}`,
+            payment_status: p.status === 'active' ? 'VERIFIED' : 'PENDING VERIFICATION',
+            utr,
+            payer_name: payer,
+            student_name: `${p.first_name} ${p.last_name}`.trim(),
+            phone: p.phone_number || '',
+            email: p.email,
+            address: p.address || '',
+            profession: p.profession || '',
+            curriculum: p.curriculum || 'Guitar',
+            class_type: p.class_schedule || 'Home Visit',
+            addons: Array.isArray(p.addons) ? p.addons.join(', ') : (p.addons || 'None'),
+            schedule: p.preferred_schedule || 'Weekend session',
+            admission_fee: 500,
+            base_tuition_fee: Number(p.monthly_fee) || 1500,
+            addon_fee: 0,
+            total_monthly_fee: `₹${p.monthly_fee || 1500}/month`,
+            payment_amount: (Number(p.monthly_fee) || 1500) + 500,
+            notes: p.notes || '',
+          });
+        }
+      }
+      const combined = Array.from(map.values());
+      setStored('tfs_admissions', combined);
+      return combined;
+    }
+  } catch (e) {
+    console.warn('Could not fetch database admissions:', e);
+  }
+  return local;
+}
+
 export async function saveAdmissionLocally(admission: AdmissionSubmission): Promise<void> {
   const current = loadStoredAdmissions();
   const existing = current.findIndex((a) => a.admission_id === admission.admission_id);
@@ -1280,14 +1367,62 @@ export async function saveAdmissionLocally(admission: AdmissionSubmission): Prom
     ? current.map((a, i) => (i === existing ? admission : a))
     : [admission, ...current];
   setStored('tfs_admissions', updated);
+
+  // Sync to student_profiles in Supabase database so admin sees it across all sessions
+  try {
+    const nameParts = admission.student_name.trim().split(' ');
+    const firstName = nameParts[0] || 'Student';
+    const lastName = nameParts.slice(1).join(' ') || '';
+    const cleanPhone = (admission.phone || '').replace(/\D/g, '').slice(-10);
+
+    await supabaseAdmin.from('student_profiles').upsert({
+      first_name: firstName,
+      last_name: lastName,
+      email: admission.email.toLowerCase().trim(),
+      phone_number: cleanPhone,
+      curriculum: admission.curriculum || 'Guitar',
+      class_schedule: admission.class_type || 'Home Visit — ₹1,500/month',
+      preferred_schedule: admission.schedule || '',
+      monthly_fee: (admission.base_tuition_fee || 0) + (admission.addon_fee || 0),
+      fee_status: 'Pending Verification',
+      status: 'pending_verification',
+      admission_id: admission.admission_id,
+      profession: admission.profession || '',
+      address: admission.address || '',
+      notes: `Admission UTR: ${admission.utr} | Payer: ${admission.payer_name} | Fee Paid: ₹${admission.payment_amount}`,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'email' });
+  } catch (err) {
+    console.warn('Admission database sync warning:', err);
+  }
+
+  broadcastSync('admissions', 'insert', admission.admission_id);
+  broadcastSync('students', 'insert');
 }
 
-export function deleteAdmissionRecord(id: string): void {
+export async function deleteAdmissionRecord(id: string): Promise<void> {
   const current = loadStoredAdmissions();
+  const matched = current.find((a) => a.id === id || a.admission_id === id);
   setStored(
     'tfs_admissions',
     current.filter((a) => a.id !== id && a.admission_id !== id)
   );
+
+  try {
+    if (matched?.email) {
+      await supabaseAdmin
+        .from('student_profiles')
+        .delete()
+        .eq('email', matched.email.toLowerCase().trim())
+        .eq('status', 'pending_verification');
+    }
+    if (id) {
+      await supabaseAdmin.from('student_profiles').delete().eq('admission_id', id);
+    }
+  } catch {}
+
+  broadcastSync('admissions', 'delete', id);
+  broadcastSync('students', 'delete');
 }
 
 export async function submitAdmissionToSpreadsheet(payload: Record<string, any>): Promise<{ success: boolean; admissionId?: string; error?: string }> {
@@ -1490,6 +1625,8 @@ export async function saveFeePaymentRecord(record: FeePaymentRecord): Promise<vo
       console.warn('Failed to forward fee payment to Google Sheet:', e);
     }
   }
+
+  broadcastSync('payments', 'insert', record.payment_reference);
 }
 
 export async function deleteFeePaymentRecord(id: string): Promise<void> {
@@ -1507,6 +1644,8 @@ export async function deleteFeePaymentRecord(id: string): Promise<void> {
   } catch (e) {
     console.warn('deleteFeePaymentRecord error:', e);
   }
+
+  broadcastSync('payments', 'delete', id);
 }
 
 export async function updateFeePaymentStatus(
@@ -1539,7 +1678,7 @@ export async function updateFeePaymentStatus(
         notes: notes || matched?.notes || '',
         verified_at: newStatus === 'VERIFIED' ? new Date().toISOString() : (matched?.verified_at || null),
       })
-      .eq('payment_reference', matched?.payment_reference || paymentId);
+      .or(`payment_reference.eq.${matched?.payment_reference || paymentId},id.eq.${paymentId}`);
   } catch (err) {
     console.warn('Could not update fee_payments in Supabase:', err);
   }
@@ -1554,9 +1693,12 @@ export async function updateFeePaymentStatus(
           status: 'active',
           updated_at: new Date().toISOString(),
         })
-        .eq('email', matched.student_email);
+        .or(`email.ilike.${matched.student_email.trim()}`);
     } catch {}
   }
+
+  broadcastSync('payments', 'update', paymentId);
+  broadcastSync('students', 'update');
 }
 
 export async function loadDiscounts(): Promise<any[]> {
@@ -1664,30 +1806,24 @@ export async function updateStudentSelfProfile(
       payload.id = updatedStudent.id;
     }
 
-    // Attempt update by email
-    const { error: spErr } = await supabase
+    // Attempt update by email or id
+    const { error: spErr } = await supabaseAdmin
       .from('student_profiles')
-      .update(payload)
-      .eq('email', email);
+      .upsert(payload, { onConflict: 'email' });
 
     if (spErr) {
-      const { error: upsertErr } = await supabaseAdmin
-        .from('student_profiles')
-        .upsert(payload, { onConflict: 'email' });
-      if (upsertErr) {
-        // Fallback with base columns if schema migration is pending
-        await supabaseAdmin.from('student_profiles').upsert({
-          first_name: payload.first_name,
-          last_name: payload.last_name,
-          email: payload.email,
-          phone_number: payload.phone_number,
-          curriculum: payload.curriculum,
-          class_schedule: payload.class_schedule,
-          status: 'active',
-          updated_at: payload.updated_at,
-          ...(payload.id ? { id: payload.id } : {}),
-        }, { onConflict: 'email' });
-      }
+      // Fallback with base columns if schema migration is pending
+      await supabaseAdmin.from('student_profiles').upsert({
+        first_name: payload.first_name,
+        last_name: payload.last_name,
+        email: payload.email,
+        phone_number: payload.phone_number,
+        curriculum: payload.curriculum,
+        class_schedule: payload.class_schedule,
+        status: 'active',
+        updated_at: payload.updated_at,
+        ...(payload.id ? { id: payload.id } : {}),
+      }, { onConflict: 'email' });
     }
 
     const fullName = `${updatedStudent.first_name} ${updatedStudent.last_name}`.trim();
@@ -1727,6 +1863,7 @@ export async function updateStudentSelfProfile(
   }
   setStored('tfs_students', updatedList);
 
+  broadcastSync('students', 'update', updatedStudent.id);
   return updatedStudent;
 }
 

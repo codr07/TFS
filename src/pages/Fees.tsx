@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CircleDollarSign, Home, Users, Video } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { loadFeePlans, loadAddOns } from '../lib/tfsData';
+import { subscribeToSync } from '../lib/syncBus';
 
 type Fee = {
   id?: string;
@@ -62,14 +63,21 @@ const Fees = () => {
   const [discounts, setDiscounts] = useState<Coupon[]>([]);
 
   useEffect(() => {
-    void Promise.all([
-      loadFeePlans(),
-      loadAddOns(),
-      supabase.from('discounts').select('*').eq('active', true).order('valid_until', { ascending: true }),
-    ]).then(([feesData, addonsData, discountsResult]) => {
-      if (feesData?.length) setFees(feesData as Fee[]);
-      if (addonsData?.length) setAddons(addonsData as AddOn[]);
-      if (discountsResult.data) setDiscounts(discountsResult.data as Coupon[]);
+    const refresh = () => {
+      void Promise.all([
+        loadFeePlans(),
+        loadAddOns(),
+        supabase.from('discounts').select('*').eq('active', true).order('valid_until', { ascending: true }),
+      ]).then(([feesData, addonsData, discountsResult]) => {
+        if (feesData?.length) setFees(feesData as Fee[]);
+        if (addonsData?.length) setAddons(addonsData as AddOn[]);
+        if (discountsResult.data) setDiscounts(discountsResult.data as Coupon[]);
+      });
+    };
+
+    refresh();
+    return subscribeToSync((e) => {
+      if (['all', 'catalogs'].includes(e.entity)) refresh();
     });
   }, []);
 

@@ -58,12 +58,16 @@ import {
   saveStudent,
   saveStudentProgress,
   deleteStudent,
+  optimizeImageFile,
+  uploadImageToBucket,
+  isUuid,
   loadStoredAdmissions,
   saveAdmissionLocally,
   deleteAdmissionRecord,
   fetchSpreadsheetAdmissions,
   submitAdmissionToSpreadsheet,
   loadStoredFeePayments,
+  fetchFeePayments,
   saveFeePaymentRecord,
   deleteFeePaymentRecord,
   updateFeePaymentStatus,
@@ -213,6 +217,11 @@ const TfsControl = () => {
       // Admissions & Fee Payments
       setAdmissions(loadStoredAdmissions());
       setFeePayments(loadStoredFeePayments());
+      fetchFeePayments().then((remotePayments) => {
+        if (remotePayments && remotePayments.length > 0) {
+          setFeePayments(remotePayments);
+        }
+      }).catch(() => {});
 
       // Fetch bookings, discounts, requests from Supabase if available
       try {
@@ -533,11 +542,28 @@ const TfsControl = () => {
               title="Refresh all data"
               style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
             >
-              <RefreshCw size={15} /> Reload
+              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Reload
             </button>
+            <a
+              href="/"
+              target="_blank"
+              rel="noreferrer"
+              className="admin-link"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <ExternalLink size={14} /> Public site
+            </a>
             <div className="admin-status">
               <span /> Secure Admin Workspace
             </div>
+            <button
+              type="button"
+              className="portal-btn-secondary"
+              onClick={handleSignOut}
+              style={{ padding: '0.45rem 0.85rem', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <LogOut size={14} /> Sign out
+            </button>
           </div>
         </header>
 
@@ -666,7 +692,8 @@ const TfsControl = () => {
             }}
             onDelete={async (id) => {
               if (window.confirm('Delete this fee plan?')) {
-                await deleteFeePlan(id);
+                const plan = fees.find((f) => f.id === id);
+                await deleteFeePlan(id, plan?.name);
                 setFees(await loadFeePlans());
                 notify('Fee plan deleted.');
               }
@@ -688,7 +715,8 @@ const TfsControl = () => {
             }}
             onDelete={async (id) => {
               if (window.confirm('Delete this curriculum module?')) {
-                await deleteCurriculumItem(id);
+                const item = curriculumItems.find((c) => c.id === id);
+                await deleteCurriculumItem(id, item?.title);
                 setCurriculumItems(await loadCurriculumItems());
                 notify('Curriculum module deleted.');
               }
@@ -710,7 +738,8 @@ const TfsControl = () => {
             }}
             onDelete={async (id) => {
               if (window.confirm('Delete this add-on?')) {
-                await deleteAddOn(id);
+                const add = addons.find((a) => a.id === id);
+                await deleteAddOn(id, add?.name);
                 setAddons(await loadAddOns());
                 notify('Add-on deleted.');
               }
@@ -732,7 +761,8 @@ const TfsControl = () => {
             }}
             onDelete={async (id) => {
               if (window.confirm('Delete this schedule?')) {
-                await deleteScheduleItem(id);
+                const sch = scheduleItems.find((s) => s.id === id);
+                await deleteScheduleItem(id, sch?.title);
                 setScheduleItems(await loadScheduleItems());
                 notify('Schedule window deleted.');
               }
@@ -755,7 +785,18 @@ const TfsControl = () => {
             }}
             onDelete={async (id) => {
               if (window.confirm('Delete this discount coupon?')) {
-                await supabaseAdmin.from('discounts').delete().eq('id', id);
+                try {
+                  if (isUuid(id)) {
+                    await supabaseAdmin.from('discounts').delete().eq('id', id);
+                  } else {
+                    const disc = discounts.find((d) => d.id === id);
+                    if (disc?.coupon_code) {
+                      await supabaseAdmin.from('discounts').delete().eq('coupon_code', disc.coupon_code);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('Delete discount notice:', e);
+                }
                 setDiscounts(discounts.filter((d) => d.id !== id));
                 notify('Discount coupon deleted.');
               }
@@ -778,7 +819,18 @@ const TfsControl = () => {
             }}
             onDelete={async (id) => {
               if (window.confirm('Delete this booking?')) {
-                await supabaseAdmin.from('bookings').delete().eq('id', id);
+                try {
+                  if (isUuid(id)) {
+                    await supabaseAdmin.from('bookings').delete().eq('id', id);
+                  } else {
+                    const b = bookings.find((item) => item.id === id);
+                    if (b?.email) {
+                      await supabaseAdmin.from('bookings').delete().eq('email', b.email);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('Delete booking notice:', e);
+                }
                 setBookings(bookings.filter((b) => b.id !== id));
                 notify('Booking deleted.');
               }
@@ -798,7 +850,18 @@ const TfsControl = () => {
             }}
             onDelete={async (id) => {
               if (window.confirm('Delete this message?')) {
-                await supabaseAdmin.from('student_requests').delete().eq('id', id);
+                try {
+                  if (isUuid(id)) {
+                    await supabaseAdmin.from('student_requests').delete().eq('id', id);
+                  } else {
+                    const req = requests.find((r) => r.id === id);
+                    if (req?.student_email) {
+                      await supabaseAdmin.from('student_requests').delete().eq('student_email', req.student_email);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('Delete message notice:', e);
+                }
                 setRequests(requests.filter((r) => r.id !== id));
                 notify('Message deleted.');
               }
@@ -809,10 +872,10 @@ const TfsControl = () => {
 
       {/* Spreadsheet / Google Apps Script Configuration Modal */}
       {showConfigModal && (
-        <div className="fee-login-modal-overlay">
-          <div className="fee-login-modal-card" style={{ maxWidth: '600px', textAlign: 'left' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h3 style={{ margin: 0, color: 'var(--gold)' }}>Google Sheets & Apps Script Setup</h3>
+        <div className="tfs-modal-overlay">
+          <div className="tfs-modal-card" style={{ maxWidth: '600px' }}>
+            <div className="tfs-modal-header">
+              <h3 style={{ margin: 0, color: 'var(--gold)', fontSize: '1.25rem' }}>Google Sheets &amp; Apps Script Setup</h3>
               <button
                 type="button"
                 onClick={() => setShowConfigModal(false)}
@@ -821,65 +884,67 @@ const TfsControl = () => {
                 <X size={20} />
               </button>
             </div>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
-              Configure your Google Apps Script Web App URL and Google Sheet link so admission forms and fee payment notifications flow directly into your database.
-            </p>
-            <div style={{ display: 'grid', gap: '1rem' }}>
-              <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text-primary)', fontSize: '0.85rem' }}>
-                Apps Script Web App Exec URL (Ending with <code>/exec</code>)
-                <input
-                  type="url"
-                  placeholder="https://script.google.com/macros/s/.../exec"
-                  value={apiUrlConfig}
-                  onChange={(e) => setApiUrlConfig(e.target.value)}
-                  style={{
-                    padding: '0.75rem',
-                    background: 'rgba(255,255,255,0.05)',
-                    border: '1px solid rgba(212,175,55,0.3)',
-                    borderRadius: '8px',
-                    color: '#fff',
-                    fontFamily: 'monospace',
-                  }}
-                />
-              </label>
-              <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text-primary)', fontSize: '0.85rem' }}>
-                Google Sheet URL (Spreadsheet)
-                <input
-                  type="url"
-                  placeholder="https://docs.google.com/spreadsheets/d/.../edit"
-                  value={sheetUrlConfig}
-                  onChange={(e) => setSheetUrlConfig(e.target.value)}
-                  style={{
-                    padding: '0.75rem',
-                    background: 'rgba(255,255,255,0.05)',
-                    border: '1px solid rgba(255,255,255,0.3)',
-                    borderRadius: '8px',
-                    color: '#fff',
-                  }}
-                />
-              </label>
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  className="admission-secondary"
-                  onClick={() => setShowConfigModal(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="admin-save"
-                  style={{ margin: 0 }}
-                  onClick={() => {
-                    setAdmissionApiUrl(apiUrlConfig);
-                    setGoogleSheetUrl(sheetUrlConfig);
-                    setShowConfigModal(false);
-                    notify('Google Apps Script and Sheet URLs saved successfully.');
-                  }}
-                >
-                  Save Configuration
-                </button>
+            <div className="tfs-modal-body">
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+                Configure your Google Apps Script Web App URL and Google Sheet link so admission forms and fee payment notifications flow directly into your database.
+              </p>
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text-primary)', fontSize: '0.85rem' }}>
+                  Apps Script Web App Exec URL (Ending with <code>/exec</code>)
+                  <input
+                    type="url"
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    value={apiUrlConfig}
+                    onChange={(e) => setApiUrlConfig(e.target.value)}
+                    style={{
+                      padding: '0.75rem',
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(212,175,55,0.3)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      fontFamily: 'monospace',
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: '0.35rem', color: 'var(--text-primary)', fontSize: '0.85rem' }}>
+                  Google Sheet URL (Spreadsheet)
+                  <input
+                    type="url"
+                    placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+                    value={sheetUrlConfig}
+                    onChange={(e) => setSheetUrlConfig(e.target.value)}
+                    style={{
+                      padding: '0.75rem',
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.3)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                    }}
+                  />
+                </label>
               </div>
+            </div>
+            <div className="tfs-modal-footer">
+              <button
+                type="button"
+                className="portal-btn-secondary"
+                onClick={() => setShowConfigModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="admin-save"
+                style={{ margin: 0 }}
+                onClick={() => {
+                  setAdmissionApiUrl(apiUrlConfig);
+                  setGoogleSheetUrl(sheetUrlConfig);
+                  setShowConfigModal(false);
+                  notify('Google Apps Script and Sheet URLs saved successfully.');
+                }}
+              >
+                <Check size={16} /> Save Configuration
+              </button>
             </div>
           </div>
         </div>
@@ -887,8 +952,8 @@ const TfsControl = () => {
 
       {/* Delete Student Confirmation Modal */}
       {studentToDelete && (
-        <div className="fee-login-modal-overlay">
-          <div className="fee-login-modal-card" style={{ maxWidth: '440px', textAlign: 'center' }}>
+        <div className="tfs-modal-overlay">
+          <div className="tfs-modal-card" style={{ maxWidth: '440px', padding: '1.75rem', textAlign: 'center' }}>
             <div style={{ color: '#ff6b6b', marginBottom: '1rem', display: 'flex', justifyContent: 'center' }}>
               <Trash2 size={40} />
             </div>
@@ -899,7 +964,7 @@ const TfsControl = () => {
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
               <button
                 type="button"
-                className="admission-secondary"
+                className="portal-btn-secondary"
                 onClick={() => setStudentToDelete(null)}
               >
                 Cancel
@@ -923,8 +988,8 @@ const TfsControl = () => {
 
       {/* Delete Admission Confirmation Modal */}
       {admissionToDelete && (
-        <div className="fee-login-modal-overlay">
-          <div className="fee-login-modal-card" style={{ maxWidth: '440px', textAlign: 'center' }}>
+        <div className="tfs-modal-overlay">
+          <div className="tfs-modal-card" style={{ maxWidth: '440px', padding: '1.75rem', textAlign: 'center' }}>
             <div style={{ color: '#ff6b6b', marginBottom: '1rem', display: 'flex', justifyContent: 'center' }}>
               <Trash2 size={40} />
             </div>
@@ -935,7 +1000,7 @@ const TfsControl = () => {
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
               <button
                 type="button"
-                className="admission-secondary"
+                className="portal-btn-secondary"
                 onClick={() => setAdmissionToDelete(null)}
               >
                 Cancel
@@ -959,8 +1024,8 @@ const TfsControl = () => {
 
       {/* Delete Fee Payment Confirmation Modal */}
       {paymentToDelete && (
-        <div className="fee-login-modal-overlay">
-          <div className="fee-login-modal-card" style={{ maxWidth: '440px', textAlign: 'center' }}>
+        <div className="tfs-modal-overlay">
+          <div className="tfs-modal-card" style={{ maxWidth: '440px', padding: '1.75rem', textAlign: 'center' }}>
             <div style={{ color: '#ff6b6b', marginBottom: '1rem', display: 'flex', justifyContent: 'center' }}>
               <Trash2 size={40} />
             </div>
@@ -971,7 +1036,7 @@ const TfsControl = () => {
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
               <button
                 type="button"
-                className="admission-secondary"
+                className="portal-btn-secondary"
                 onClick={() => setPaymentToDelete(null)}
               >
                 Cancel
@@ -1263,13 +1328,26 @@ const StudentsSection = ({
           filtered.map((student) => (
             <div className="admin-table-row" key={student.id}>
               <span>
-                <b>{`${student.first_name} ${student.last_name}`.trim() || 'Student'}</b>
-                <small>{student.email || 'No email'} · {student.phone_number || 'No phone'}</small>
-                {student.admission_id && (
-                  <small style={{ color: 'var(--gold)', fontFamily: 'monospace' }}>
-                    Adm ID: {student.admission_id}
-                  </small>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div className="portal-avatar-wrap" style={{ width: '40px', height: '40px', flexShrink: 0 }}>
+                    {student.avatar_url ? (
+                      <img src={student.avatar_url} alt={student.first_name} className="portal-avatar-img" />
+                    ) : (
+                      <div className="portal-avatar-initials" style={{ width: '40px', height: '40px', fontSize: '0.95rem' }}>
+                        {(student.first_name || 'S').charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <b>{`${student.first_name} ${student.last_name}`.trim() || 'Student'}</b>
+                    <small style={{ display: 'block' }}>{student.email || 'No email'} · {student.phone_number || 'No phone'}</small>
+                    {student.admission_id && (
+                      <small style={{ color: 'var(--gold)', fontFamily: 'monospace' }}>
+                        Adm ID: {student.admission_id}
+                      </small>
+                    )}
+                  </div>
+                </div>
               </span>
               <span>
                 <b>{student.curriculum || 'Guitar'}</b>
@@ -1280,16 +1358,27 @@ const StudentsSection = ({
                 )}
 
                 {/* Live Progress Bar in Admin Row */}
-                <div style={{ marginTop: '0.45rem', padding: '0.35rem 0.55rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.07)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                      <GraduationCap size={13} style={{ color: 'var(--gold)' }} /> Syllabus Progress
-                    </span>
+                <div style={{ marginTop: '0.45rem', padding: '0.4rem 0.6rem', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.07)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => onManageProgress && onManageProgress(student)}
+                      className="admin-link"
+                      style={{ padding: 0, fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem', color: 'var(--gold)' }}
+                      title="Open Syllabus & Evaluation Control Modal"
+                    >
+                      <GraduationCap size={13} />
+                      <b>Progress Control</b>
+                    </button>
                     <b style={{ color: (student.overall_progress_pct || 0) >= 80 ? '#5dd37a' : 'var(--gold)' }}>
                       {student.overall_progress_pct !== undefined ? `${student.overall_progress_pct}%` : '0%'}
                     </b>
                   </div>
-                  <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                  <div
+                    onClick={() => onManageProgress && onManageProgress(student)}
+                    title="Click to control student syllabus & evaluations"
+                    style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden', cursor: 'pointer' }}
+                  >
                     <div
                       style={{
                         width: `${student.overall_progress_pct || 0}%`,
@@ -1346,7 +1435,7 @@ const StudentsSection = ({
                   type="button"
                   title="Control Syllabus Progress & Feedback"
                   onClick={() => onManageProgress && onManageProgress(student)}
-                  style={{ color: 'var(--gold)', borderColor: 'rgba(212,175,55,0.4)', background: 'rgba(212,175,55,0.08)' }}
+                  style={{ color: 'var(--gold)', borderColor: 'rgba(212,175,55,0.4)', background: 'rgba(212,175,55,0.12)' }}
                 >
                   <Award size={15} />
                 </button>
@@ -1480,15 +1569,15 @@ const StudentProgressModal = ({
     <div className="tfs-modal-overlay">
       <div className="tfs-modal-card">
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '1rem', marginBottom: '1.25rem' }}>
+        <div className="tfs-modal-header">
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
               <Award size={22} style={{ color: 'var(--gold)' }} />
-              <h2 style={{ margin: 0, fontSize: '1.4rem', color: 'var(--gold)' }}>
+              <h2 style={{ margin: 0, fontSize: '1.3rem', color: 'var(--gold)' }}>
                 Progress &amp; Evaluation Control
               </h2>
             </div>
-            <p style={{ margin: '0.3rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            <p style={{ margin: '0.3rem 0 0', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
               Student: <b style={{ color: '#fff' }}>{`${student.first_name} ${student.last_name}`.trim()}</b> ({student.email}) · Track: <b style={{ color: 'var(--gold)' }}>{student.curriculum}</b>
             </p>
           </div>
@@ -1501,194 +1590,197 @@ const StudentProgressModal = ({
           </button>
         </div>
 
-        {/* Live Mastery Banner */}
-        <div style={{ padding: '1rem 1.25rem', background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.25)', borderRadius: '12px', marginBottom: '1.25rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <span style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 600 }}>Overall Syllabus Mastery</span>
-            <strong style={{ fontSize: '1.3rem', color: pct >= 80 ? '#5dd37a' : 'var(--gold)' }}>{pct}% Complete</strong>
-          </div>
-          <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '0.6rem' }}>
-            <div style={{ width: `${pct}%`, height: '100%', background: pct >= 80 ? '#5dd37a' : 'var(--gold)', transition: 'width 0.3s ease' }} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--text-secondary)', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <span>{masteredCount} Mastered · {inProgressCount} In Progress · {total - masteredCount - inProgressCount} Not Started</span>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                type="button"
-                onClick={() => handleSetAll('in_progress')}
-                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--gold)', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
-              >
-                All Learning
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSetAll('mastered')}
-                style={{ background: 'rgba(93,211,122,0.15)', border: '1px solid rgba(93,211,122,0.3)', color: '#5dd37a', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
-              >
-                All Mastered
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSetAll('not_started')}
-                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
-              >
-                Reset
-              </button>
+        {/* Scrollable Body */}
+        <div className="tfs-modal-body">
+          {/* Live Mastery Banner */}
+          <div style={{ padding: '1rem 1.25rem', background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.25)', borderRadius: '12px', marginBottom: '1.25rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 600 }}>Overall Syllabus Mastery</span>
+              <strong style={{ fontSize: '1.3rem', color: pct >= 80 ? '#5dd37a' : 'var(--gold)' }}>{pct}% Complete</strong>
+            </div>
+            <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden', marginBottom: '0.6rem' }}>
+              <div style={{ width: `${pct}%`, height: '100%', background: pct >= 80 ? '#5dd37a' : 'var(--gold)', transition: 'width 0.3s ease' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--text-secondary)', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <span>{masteredCount} Mastered · {inProgressCount} In Progress · {total - masteredCount - inProgressCount} Not Started</span>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => handleSetAll('in_progress')}
+                  style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--gold)', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
+                >
+                  All Learning
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetAll('mastered')}
+                  style={{ background: 'rgba(93,211,122,0.15)', border: '1px solid rgba(93,211,122,0.3)', color: '#5dd37a', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
+                >
+                  All Mastered
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetAll('not_started')}
+                  style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)', borderRadius: '4px', padding: '0.2rem 0.5rem', fontSize: '0.72rem', cursor: 'pointer' }}
+                >
+                  Reset
+                </button>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Modules List */}
-        <div style={{ maxHeight: '42vh', overflowY: 'auto', marginBottom: '1.25rem', paddingRight: '0.25rem' }}>
-          <div style={{ display: 'grid', gap: '0.65rem' }}>
-            {activeModules.map((mod, idx) => {
-              const currentStatus = progress[mod.id] || 'not_started';
-              return (
-                <div
-                  key={mod.id}
-                  style={{
-                    padding: '0.85rem 1rem',
-                    borderRadius: '10px',
-                    background: currentStatus === 'mastered' ? 'rgba(93,211,122,0.06)' : currentStatus === 'in_progress' ? 'rgba(212,175,55,0.06)' : 'rgba(255,255,255,0.02)',
-                    border: currentStatus === 'mastered' ? '1px solid rgba(93,211,122,0.25)' : currentStatus === 'in_progress' ? '1px solid rgba(212,175,55,0.25)' : '1px solid rgba(255,255,255,0.06)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    flexWrap: 'wrap',
-                    gap: '0.75rem',
-                  }}
-                >
-                  <div style={{ flex: '1 1 280px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
-                      <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(212,175,55,0.15)', color: 'var(--gold)', fontWeight: 600 }}>
-                        Module {idx + 1}
-                      </span>
-                      <b style={{ color: '#fff', fontSize: '0.92rem' }}>{mod.title}</b>
+          {/* Modules List */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <div style={{ display: 'grid', gap: '0.65rem' }}>
+              {activeModules.map((mod, idx) => {
+                const currentStatus = progress[mod.id] || 'not_started';
+                return (
+                  <div
+                    key={mod.id}
+                    style={{
+                      padding: '0.85rem 1rem',
+                      borderRadius: '10px',
+                      background: currentStatus === 'mastered' ? 'rgba(93,211,122,0.06)' : currentStatus === 'in_progress' ? 'rgba(212,175,55,0.06)' : 'rgba(255,255,255,0.02)',
+                      border: currentStatus === 'mastered' ? '1px solid rgba(93,211,122,0.25)' : currentStatus === 'in_progress' ? '1px solid rgba(212,175,55,0.25)' : '1px solid rgba(255,255,255,0.06)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '0.75rem',
+                    }}
+                  >
+                    <div style={{ flex: '1 1 280px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                        <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(212,175,55,0.15)', color: 'var(--gold)', fontWeight: 600 }}>
+                          Module {idx + 1}
+                        </span>
+                        <b style={{ color: '#fff', fontSize: '0.92rem' }}>{mod.title}</b>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                        {mod.description}
+                      </p>
                     </div>
-                    <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      {mod.description}
-                    </p>
-                  </div>
 
-                  {/* 3-State Segmented Control */}
-                  <div style={{ display: 'inline-flex', background: 'rgba(0,0,0,0.4)', borderRadius: '8px', padding: '3px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(mod.id, 'not_started')}
-                      style={{
-                        padding: '0.35rem 0.65rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        border: 'none',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        background: currentStatus === 'not_started' ? 'rgba(255,255,255,0.12)' : 'transparent',
-                        color: currentStatus === 'not_started' ? '#fff' : 'var(--text-secondary)',
-                      }}
-                    >
-                      ○ Not Started
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(mod.id, 'in_progress')}
-                      style={{
-                        padding: '0.35rem 0.65rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        border: 'none',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        background: currentStatus === 'in_progress' ? 'rgba(212,175,55,0.25)' : 'transparent',
-                        color: currentStatus === 'in_progress' ? 'var(--gold)' : 'var(--text-secondary)',
-                      }}
-                    >
-                      ⏳ Learning
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSetStatus(mod.id, 'mastered')}
-                      style={{
-                        padding: '0.35rem 0.65rem',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        border: 'none',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        background: currentStatus === 'mastered' ? 'rgba(93,211,122,0.25)' : 'transparent',
-                        color: currentStatus === 'mastered' ? '#5dd37a' : 'var(--text-secondary)',
-                      }}
-                    >
-                      ✓ Mastered
-                    </button>
+                    {/* 3-State Segmented Control */}
+                    <div style={{ display: 'inline-flex', background: 'rgba(0,0,0,0.4)', borderRadius: '8px', padding: '3px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleSetStatus(mod.id, 'not_started')}
+                        style={{
+                          padding: '0.35rem 0.65rem',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          background: currentStatus === 'not_started' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                          color: currentStatus === 'not_started' ? '#fff' : 'var(--text-secondary)',
+                        }}
+                      >
+                        ○ Not Started
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSetStatus(mod.id, 'in_progress')}
+                        style={{
+                          padding: '0.35rem 0.65rem',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          background: currentStatus === 'in_progress' ? 'rgba(212,175,55,0.25)' : 'transparent',
+                          color: currentStatus === 'in_progress' ? 'var(--gold)' : 'var(--text-secondary)',
+                        }}
+                      >
+                        ⏳ Learning
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSetStatus(mod.id, 'mastered')}
+                        style={{
+                          padding: '0.35rem 0.65rem',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          background: currentStatus === 'mastered' ? 'rgba(93,211,122,0.25)' : 'transparent',
+                          color: currentStatus === 'mastered' ? '#5dd37a' : 'var(--text-secondary)',
+                        }}
+                      >
+                        ✓ Mastered
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Milestone Badges Awarded */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '0.5rem', fontWeight: 600 }}>
+              Award Student Milestone Badges:
+            </label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+              {availableBadges.map((badge) => {
+                const active = badges.includes(badge);
+                return (
+                  <button
+                    key={badge}
+                    type="button"
+                    onClick={() => handleToggleBadge(badge)}
+                    style={{
+                      padding: '0.35rem 0.75rem',
+                      borderRadius: '8px',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      background: active ? 'rgba(212,175,55,0.2)' : 'rgba(255,255,255,0.03)',
+                      border: active ? '1px solid var(--gold)' : '1px solid rgba(255,255,255,0.1)',
+                      color: active ? 'var(--gold)' : 'var(--text-secondary)',
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    {badge} {active ? '✓' : '+'}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Instructor Evaluation Notes */}
+          <div style={{ marginBottom: '0.5rem' }}>
+            <label style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '0.4rem', fontWeight: 600 }}>
+              Instructor Feedback &amp; Lesson Notes (Visible in Student Corner):
+            </label>
+            <textarea
+              rows={3}
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              placeholder="e.g. Excellent progress on barre chords! For next week, practice F#m with metronome at 72bpm..."
+              style={{
+                width: '100%',
+                padding: '0.75rem',
+                borderRadius: '8px',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                color: '#fff',
+                font: 'inherit',
+                boxSizing: 'border-box',
+                resize: 'vertical',
+              }}
+            />
           </div>
         </div>
 
-        {/* Milestone Badges Awarded */}
-        <div style={{ marginBottom: '1.25rem' }}>
-          <label style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '0.5rem', fontWeight: 600 }}>
-            Award Student Milestone Badges:
-          </label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-            {availableBadges.map((badge) => {
-              const active = badges.includes(badge);
-              return (
-                <button
-                  key={badge}
-                  type="button"
-                  onClick={() => handleToggleBadge(badge)}
-                  style={{
-                    padding: '0.35rem 0.75rem',
-                    borderRadius: '8px',
-                    fontSize: '0.8rem',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    background: active ? 'rgba(212,175,55,0.2)' : 'rgba(255,255,255,0.03)',
-                    border: active ? '1px solid var(--gold)' : '1px solid rgba(255,255,255,0.1)',
-                    color: active ? 'var(--gold)' : 'var(--text-secondary)',
-                    transition: 'all 0.2s ease',
-                  }}
-                >
-                  {badge} {active ? '✓' : '+'}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Instructor Evaluation Notes */}
-        <div style={{ marginBottom: '1.5rem' }}>
-          <label style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '0.4rem', fontWeight: 600 }}>
-            Instructor Feedback &amp; Lesson Notes (Visible in Student Corner):
-          </label>
-          <textarea
-            rows={3}
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            placeholder="e.g. Excellent progress on barre chords! For next week, practice F#m with metronome at 72bpm..."
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              borderRadius: '8px',
-              background: 'rgba(255,255,255,0.03)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              color: '#fff',
-              font: 'inherit',
-              boxSizing: 'border-box',
-              resize: 'vertical',
-            }}
-          />
-        </div>
-
-        {/* Action Buttons */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+        {/* Sticky Footer */}
+        <div className="tfs-modal-footer">
           <button
             type="button"
+            className="portal-btn-secondary"
             onClick={onClose}
-            style={{ padding: '0.75rem 1.25rem', borderRadius: '8px', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer' }}
           >
             Cancel
           </button>
@@ -1696,20 +1788,10 @@ const StudentProgressModal = ({
             type="button"
             disabled={saving}
             onClick={handleSave}
-            style={{
-              padding: '0.75rem 1.5rem',
-              borderRadius: '8px',
-              background: 'var(--gold)',
-              border: '1px solid var(--gold)',
-              color: '#000',
-              fontWeight: 700,
-              cursor: saving ? 'not-allowed' : 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-            }}
+            className="admin-save"
+            style={{ margin: 0 }}
           >
-            <Check size={16} />
+            <Check size={18} />
             {saving ? 'Syncing...' : 'Save & Sync Progress'}
           </button>
         </div>
@@ -1827,10 +1909,11 @@ const StudentEditModal = ({
 
   return (
     <div className="tfs-modal-overlay">
-      <div className="tfs-modal-card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.75rem' }}>
+      <form onSubmit={handleSubmit} className="tfs-modal-card">
+        {/* Header */}
+        <div className="tfs-modal-header">
           <div>
-            <h3 style={{ margin: 0, color: 'var(--gold)', fontSize: '1.4rem' }}>
+            <h3 style={{ margin: 0, color: 'var(--gold)', fontSize: '1.3rem' }}>
               {student.id && !student.id.startsWith('std-') ? 'Edit Student Account' : 'Student Account Setup'}
             </h3>
             <p style={{ margin: '0.2rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
@@ -1842,195 +1925,246 @@ const StudentEditModal = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
-          {/* Section: Personal Info */}
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            First Name *
-            <input
-              required
-              value={form.first_name}
-              onChange={(e) => setForm({ ...form, first_name: e.target.value })}
-              style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Last Name
-            <input
-              value={form.last_name}
-              onChange={(e) => setForm({ ...form, last_name: e.target.value })}
-              style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Email Address *
-            <input
-              required
-              type="email"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Phone / WhatsApp
-            <input
-              value={form.phone_number}
-              onChange={(e) => setForm({ ...form, phone_number: e.target.value })}
-              style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          {/* Section: PREDEFINED CURRICULUM DROPDOWN */}
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--gold)', fontWeight: 'bold' }}>
-            Curriculum Track (Dropdown) *
-            <select
-              value={form.curriculum}
-              onChange={(e) => setForm({ ...form, curriculum: e.target.value })}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', fontSize: '0.9rem' }}
-            >
-              {PREDEFINED_CURRICULUMS.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {/* Section: DYNAMIC PLAN DROPDOWN */}
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--gold)', fontWeight: 'bold' }}>
-            Tuition Plan (Database Synced) *
-            <select
-              value={form.class_schedule}
-              onChange={(e) => handlePlanChange(e.target.value)}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', fontSize: '0.9rem' }}
-            >
-              {planOptions.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {/* Section: DYNAMIC SCHEDULE DROPDOWN */}
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Batch Schedule Window (Database Synced) *
-            <select
-              value={form.preferred_schedule || scheduleOptions[0]}
-              onChange={(e) => setForm({ ...form, preferred_schedule: e.target.value })}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            >
-              {scheduleOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {/* Section: DYNAMIC ADDONS DROPDOWN */}
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Optional Add-ons (Database Synced)
-            <select
-              value={(form.addons && form.addons.length > 0) ? form.addons[0] : 'None'}
-              onChange={(e) => handleAddonChange(e.target.value)}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            >
-              {addonOptions.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {/* Section: FEE CALCULATION & STATUS */}
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Monthly Fee Payable (₹)
-            <input
-              type="number"
-              value={form.monthly_fee || 1300}
-              onChange={(e) => setForm({ ...form, monthly_fee: Number(e.target.value) })}
-              style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: 'var(--gold)', fontWeight: 'bold' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Fee Status (Dropdown)
-            <select
-              value={form.fee_status || 'Up to date'}
-              onChange={(e) => setForm({ ...form, fee_status: e.target.value as any })}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            >
-              {PREDEFINED_FEE_STATUSES.map((st) => (
-                <option key={st} value={st}>
-                  {st}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {/* Section: PREDEFINED ACCOUNT STATUS DROPDOWN */}
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Account Status (Dropdown) *
-            <select
-              value={form.status || 'active'}
-              onChange={(e) => setForm({ ...form, status: e.target.value as any })}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            >
-              {PREDEFINED_STUDENT_STATUSES.map((st) => (
-                <option key={st.value} value={st.value}>
-                  {st.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Admission ID
-            <input
-              value={form.admission_id || ''}
-              placeholder="e.g. TFS-20261012-ABCDE"
-              onChange={(e) => setForm({ ...form, admission_id: e.target.value })}
-              style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', fontFamily: 'monospace' }}
-            />
-          </label>
-
-          {/* Full width inputs */}
-          <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Full Address
-            <input
-              value={form.address || ''}
-              placeholder="Student delivery / visit address"
-              onChange={(e) => setForm({ ...form, address: e.target.value })}
-              style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Admin Notes / Teacher Comments
-            <textarea
-              rows={2}
-              value={form.notes || ''}
-              placeholder="Optional notes regarding progress, payments or custom requirements"
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', resize: 'vertical' }}
-            />
-          </label>
-
-          <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '1rem' }}>
-            <button type="button" className="admission-secondary" onClick={onCancel}>
-              Cancel
-            </button>
-            <button type="submit" className="admin-save" style={{ margin: 0 }} disabled={saving}>
-              {saving ? 'Saving...' : 'Save Student Account'}
-            </button>
+        {/* Scrollable Body */}
+        <div className="tfs-modal-body">
+          {/* Avatar Photo Management */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', padding: '1rem', borderRadius: '12px', background: 'rgba(212,175,55,0.05)', border: '1px solid rgba(212,175,55,0.2)', marginBottom: '1.25rem' }}>
+            <div className="portal-avatar-wrap" style={{ width: 64, height: 64 }}>
+              {form.avatar_url ? (
+                <img src={form.avatar_url} alt={form.first_name} className="portal-avatar-img" />
+              ) : (
+                <div className="portal-avatar-initials" style={{ fontSize: '1.3rem' }}>
+                  {form.first_name ? form.first_name.charAt(0).toUpperCase() : 'S'}
+                </div>
+              )}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#fff', marginBottom: '0.2rem' }}>
+                Student Photo / Portal Avatar
+              </div>
+              <p style={{ margin: '0 0 0.6rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                Displayed on the Student Digital ID pass, portal header, and account profile.
+              </p>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                <label className="portal-btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', cursor: 'pointer' }}>
+                  Upload Photo
+                  <input
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const bucketUrl = await uploadImageToBucket(file, 'students');
+                      setForm((prev) => ({ ...prev, avatar_url: bucketUrl }));
+                    }}
+                  />
+                </label>
+                {form.avatar_url && (
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, avatar_url: '' }))}
+                    style={{ background: 'none', border: '1px solid rgba(255,107,107,0.3)', color: '#ff6b6b', borderRadius: '6px', padding: '0.35rem 0.65rem', fontSize: '0.75rem', cursor: 'pointer' }}
+                  >
+                    Remove Photo
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
-        </form>
-      </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+            {/* Section: Personal Info */}
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              First Name *
+              <input
+                required
+                value={form.first_name}
+                onChange={(e) => setForm({ ...form, first_name: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Last Name
+              <input
+                value={form.last_name}
+                onChange={(e) => setForm({ ...form, last_name: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Email Address *
+              <input
+                required
+                type="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Phone / WhatsApp
+              <input
+                value={form.phone_number}
+                onChange={(e) => setForm({ ...form, phone_number: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            {/* Section: PREDEFINED CURRICULUM DROPDOWN */}
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--gold)', fontWeight: 'bold' }}>
+              Curriculum Track (Dropdown) *
+              <select
+                value={form.curriculum}
+                onChange={(e) => setForm({ ...form, curriculum: e.target.value })}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', fontSize: '0.9rem' }}
+              >
+                {PREDEFINED_CURRICULUMS.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {/* Section: DYNAMIC PLAN DROPDOWN */}
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--gold)', fontWeight: 'bold' }}>
+              Tuition Plan (Database Synced) *
+              <select
+                value={form.class_schedule}
+                onChange={(e) => handlePlanChange(e.target.value)}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', fontSize: '0.9rem' }}
+              >
+                {planOptions.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {/* Section: DYNAMIC SCHEDULE DROPDOWN */}
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Batch Schedule Window (Database Synced) *
+              <select
+                value={form.preferred_schedule || scheduleOptions[0]}
+                onChange={(e) => setForm({ ...form, preferred_schedule: e.target.value })}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              >
+                {scheduleOptions.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {/* Section: DYNAMIC ADDONS DROPDOWN */}
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Optional Add-ons (Database Synced)
+              <select
+                value={(form.addons && form.addons.length > 0) ? form.addons[0] : 'None'}
+                onChange={(e) => handleAddonChange(e.target.value)}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              >
+                {addonOptions.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {/* Section: FEE CALCULATION & STATUS */}
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Monthly Fee Payable (₹)
+              <input
+                type="number"
+                value={form.monthly_fee || 1300}
+                onChange={(e) => setForm({ ...form, monthly_fee: Number(e.target.value) })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: 'var(--gold)', fontWeight: 'bold' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Fee Status (Dropdown)
+              <select
+                value={form.fee_status || 'Up to date'}
+                onChange={(e) => setForm({ ...form, fee_status: e.target.value as any })}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              >
+                {PREDEFINED_FEE_STATUSES.map((st) => (
+                  <option key={st} value={st}>
+                    {st}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {/* Section: PREDEFINED ACCOUNT STATUS DROPDOWN */}
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Account Status (Dropdown) *
+              <select
+                value={form.status || 'active'}
+                onChange={(e) => setForm({ ...form, status: e.target.value as any })}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              >
+                {PREDEFINED_STUDENT_STATUSES.map((st) => (
+                  <option key={st.value} value={st.value}>
+                    {st.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Admission ID
+              <input
+                value={form.admission_id || ''}
+                placeholder="e.g. TFS-20261012-ABCDE"
+                onChange={(e) => setForm({ ...form, admission_id: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', fontFamily: 'monospace' }}
+              />
+            </label>
+
+            {/* Full width inputs */}
+            <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Full Address
+              <input
+                value={form.address || ''}
+                placeholder="Student delivery / visit address"
+                onChange={(e) => setForm({ ...form, address: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Admin Notes / Teacher Comments
+              <textarea
+                rows={2}
+                value={form.notes || ''}
+                placeholder="Optional notes regarding progress, payments or custom requirements"
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', resize: 'vertical' }}
+              />
+            </label>
+          </div>
+        </div>
+
+        {/* Sticky Footer */}
+        <div className="tfs-modal-footer">
+          <button type="button" className="portal-btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="admin-save" style={{ margin: 0 }} disabled={saving}>
+            <Check size={18} />
+            {saving ? 'Saving...' : 'Save Student Account'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 };
@@ -2295,61 +2429,65 @@ const FeePaymentModal = ({
   };
 
   return (
-    <div className="fee-login-modal-overlay">
-      <div className="fee-login-modal-card" style={{ maxWidth: '650px', textAlign: 'left' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <h3 style={{ margin: 0, color: 'var(--gold)' }}>Fee Payment Record</h3>
+    <div className="tfs-modal-overlay">
+      <form onSubmit={handleSubmit} className="tfs-modal-card" style={{ maxWidth: '650px' }}>
+        <div className="tfs-modal-header">
+          <h3 style={{ margin: 0, color: 'var(--gold)', fontSize: '1.25rem' }}>Fee Payment Record</h3>
           <button type="button" onClick={onCancel} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>
             <X size={20} />
           </button>
         </div>
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Student Name *
-            <input required value={form.student_name} onChange={(e) => setForm({ ...form, student_name: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }} />
-          </label>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Student Email *
-            <input required type="email" value={form.student_email} onChange={(e) => setForm({ ...form, student_email: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }} />
-          </label>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Payer Name *
-            <input required value={form.payer_name} onChange={(e) => setForm({ ...form, payer_name: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }} />
-          </label>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            UTR / Transaction ID *
-            <input required value={form.utr} onChange={(e) => setForm({ ...form, utr: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff', fontFamily: 'monospace' }} />
-          </label>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Curriculum
-            <select value={form.curriculum} onChange={(e) => setForm({ ...form, curriculum: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}>
-              {PREDEFINED_CURRICULUMS.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Class Plan
-            <select value={form.class_type} onChange={(e) => setForm({ ...form, class_type: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}>
-              {PREDEFINED_PLANS.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </label>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Amount Paid (₹) *
-            <input required type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} style={{ padding: '0.75rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: 'var(--gold)', fontWeight: 'bold' }} />
-          </label>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Verification Status
-            <select value={form.payment_status} onChange={(e) => setForm({ ...form, payment_status: e.target.value as any })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}>
-              <option value="PENDING VERIFICATION">PENDING VERIFICATION</option>
-              <option value="VERIFIED">VERIFIED</option>
-              <option value="REJECTED">REJECTED</option>
-            </select>
-          </label>
-          <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
-            <button type="button" className="admission-secondary" onClick={onCancel}>Cancel</button>
-            <button type="submit" className="admin-save" style={{ margin: 0 }}>Save Fee Payment</button>
+        <div className="tfs-modal-body">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Student Name *
+              <input required value={form.student_name} onChange={(e) => setForm({ ...form, student_name: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Student Email *
+              <input required type="email" value={form.student_email} onChange={(e) => setForm({ ...form, student_email: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Payer Name *
+              <input required value={form.payer_name} onChange={(e) => setForm({ ...form, payer_name: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              UTR / Transaction ID *
+              <input required value={form.utr} onChange={(e) => setForm({ ...form, utr: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff', fontFamily: 'monospace' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Curriculum
+              <select value={form.curriculum} onChange={(e) => setForm({ ...form, curriculum: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}>
+                {PREDEFINED_CURRICULUMS.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Class Plan
+              <select value={form.class_type} onChange={(e) => setForm({ ...form, class_type: e.target.value })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}>
+                {PREDEFINED_PLANS.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Amount Paid (₹) *
+              <input required type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })} style={{ padding: '0.75rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: 'var(--gold)', fontWeight: 'bold' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Verification Status
+              <select value={form.payment_status} onChange={(e) => setForm({ ...form, payment_status: e.target.value as any })} style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}>
+                <option value="PENDING VERIFICATION">PENDING VERIFICATION</option>
+                <option value="VERIFIED">VERIFIED</option>
+                <option value="REJECTED">REJECTED</option>
+              </select>
+            </label>
           </div>
-        </form>
-      </div>
+        </div>
+        <div className="tfs-modal-footer">
+          <button type="button" className="portal-btn-secondary" onClick={onCancel}>Cancel</button>
+          <button type="submit" className="admin-save" style={{ margin: 0 }}>
+            <Check size={18} /> Save Fee Payment
+          </button>
+        </div>
+      </form>
     </div>
   );
 };

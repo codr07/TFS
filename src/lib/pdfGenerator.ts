@@ -1,12 +1,42 @@
 import { jsPDF } from 'jspdf';
 import type { StudentProfile, FeePaymentRecord } from './tfsData';
 
+// Helper to load image URL as base64 DataURL for jsPDF embedding
+async function loadImgDataUrl(src: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(null);
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
 export async function generateStudentIdCardPdf(
   student: StudentProfile | null,
   displayName: string,
   studentIdBadge: string,
   feeSummary?: { basePlanName: string; totalAmount: number }
 ): Promise<void> {
+  // Pre-load assets
+  const [logoData, signData, avatarData] = await Promise.all([
+    loadImgDataUrl('/images/logo_t.png'),
+    loadImgDataUrl('/images/sign.png'),
+    student?.avatar_url ? loadImgDataUrl(student.avatar_url) : Promise.resolve(null),
+  ]);
+
   // A4 Landscape format
   const doc = new jsPDF({
     orientation: 'landscape',
@@ -35,29 +65,38 @@ export async function generateStudentIdCardPdf(
   doc.setFillColor(25, 28, 36);
   doc.rect(17, 17, pageWidth - 34, 38, 'F');
 
+  // Embed Official TFS Logo
+  if (logoData) {
+    try {
+      doc.addImage(logoData, 'PNG', 24, 21, 24, 24);
+    } catch {}
+  }
+
+  const headerTextX = logoData ? 53 : 26;
+
   // Top header text
   doc.setTextColor(212, 175, 55);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(26);
-  doc.text('THE FRETBOARD SOCIETY', 26, 33);
+  doc.setFontSize(23);
+  doc.text('THE FRETBOARD SOCIETY', headerTextX, 32);
 
   doc.setTextColor(175, 175, 175);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(11);
-  doc.text('ACOUSTIC GUITAR & UKULELE MASTERY ACADEMY • OFFICIAL STUDENT ID CARD', 26, 44);
+  doc.setFontSize(10);
+  doc.text('ACOUSTIC GUITAR & UKULELE MASTERY ACADEMY • OFFICIAL SCHOLAR PASS', headerTextX, 42);
 
   // Status Badge on Header Right
   doc.setFillColor(40, 167, 69);
-  doc.roundedRect(pageWidth - 78, 24, 52, 10, 2, 2, 'F');
+  doc.roundedRect(pageWidth - 78, 22, 52, 9, 2, 2, 'F');
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.text('VERIFIED SCHOLAR', pageWidth - 52, 30.5, { align: 'center' });
+  doc.setFontSize(8.5);
+  doc.text('VERIFIED SCHOLAR', pageWidth - 52, 28, { align: 'center' });
 
   doc.setTextColor(212, 175, 55);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(13);
-  doc.text(studentIdBadge || 'TFS-STUDENT', pageWidth - 52, 43, { align: 'center' });
+  doc.setFontSize(12);
+  doc.text(studentIdBadge || 'TFS-STUDENT', pageWidth - 52, 40, { align: 'center' });
 
   // Divider Line
   doc.setDrawColor(212, 175, 55);
@@ -71,34 +110,45 @@ export async function generateStudentIdCardPdf(
   doc.setLineWidth(1.2);
   doc.roundedRect(26, 65, 65, 80, 4, 4, 'S');
 
-  // Inner emblem circle
-  doc.setFillColor(30, 35, 45);
-  doc.circle(58.5, 97, 22, 'F');
-  doc.setDrawColor(212, 175, 55);
-  doc.setLineWidth(0.8);
-  doc.circle(58.5, 97, 22, 'S');
+  if (avatarData) {
+    try {
+      doc.addImage(avatarData, 'JPEG', 28, 67, 61, 76);
+    } catch {
+      drawFallbackAvatar();
+    }
+  } else {
+    drawFallbackAvatar();
+  }
 
-  doc.setTextColor(212, 175, 55);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(28);
-  doc.text('TFS', 58.5, 100, { align: 'center' });
+  function drawFallbackAvatar() {
+    doc.setFillColor(30, 35, 45);
+    doc.circle(58.5, 97, 22, 'F');
+    doc.setDrawColor(212, 175, 55);
+    doc.setLineWidth(0.8);
+    doc.circle(58.5, 97, 22, 'S');
 
-  doc.setFontSize(10);
-  doc.setTextColor(255, 255, 255);
-  doc.text('ACADEMIC PASS', 58.5, 132, { align: 'center' });
+    doc.setTextColor(212, 175, 55);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(28);
+    doc.text('TFS', 58.5, 100, { align: 'center' });
 
-  doc.setFontSize(8);
-  doc.setTextColor(175, 175, 175);
-  doc.text('2026 – 2027', 58.5, 138, { align: 'center' });
+    doc.setFontSize(9);
+    doc.setTextColor(255, 255, 255);
+    doc.text('ACCREDITED SCHOLAR', 58.5, 131, { align: 'center' });
+
+    doc.setFontSize(8);
+    doc.setTextColor(175, 175, 175);
+    doc.text('SESSION 2026 – 2027', 58.5, 138, { align: 'center' });
+  }
 
   // Right Column: Student Details
-  const startX = 105;
-  let curY = 72;
+  const startX = 104;
+  let curY = 71;
 
   const addField = (label: string, value: string, isGold = false) => {
     doc.setTextColor(150, 150, 150);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
+    doc.setFontSize(8.5);
     doc.text(label.toUpperCase(), startX, curY);
 
     if (isGold) {
@@ -107,19 +157,19 @@ export async function generateStudentIdCardPdf(
       doc.setTextColor(250, 250, 250);
     }
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(14);
-    doc.text(value || '—', startX, curY + 6);
+    doc.setFontSize(13);
+    doc.text(value || '—', startX, curY + 5.5);
 
     // subtle underline
     doc.setDrawColor(40, 45, 55);
     doc.setLineWidth(0.3);
-    doc.line(startX, curY + 9, pageWidth - 26, curY + 9);
+    doc.line(startX, curY + 8.5, pageWidth - 26, curY + 8.5);
 
-    curY += 16;
+    curY += 15.5;
   };
 
   addField('Full Student Name', displayName);
-  addField('Curriculum Track', student?.curriculum || 'Guitar', true);
+  addField('Curriculum / Track', student?.curriculum || 'Guitar', true);
   addField(
     'Enrolled Tuition Plan',
     feeSummary
@@ -127,43 +177,60 @@ export async function generateStudentIdCardPdf(
       : student?.class_schedule || 'Active Tuition Plan'
   );
   addField('Assigned Batch Schedule', student?.preferred_schedule || 'Weekend / Scheduled Window');
-  addField('Student Contact Email', student?.email || 'Registered Academy Scholar');
+  addField('Scholar Contact / Email', `${student?.email || 'Scholar'}  ${student?.phone_number ? '• ' + student.phone_number : ''}`);
 
   // Bottom Footer Bar
   doc.setFillColor(20, 22, 28);
-  doc.rect(17, pageHeight - 42, pageWidth - 34, 25, 'F');
+  doc.rect(17, pageHeight - 44, pageWidth - 34, 27, 'F');
   doc.setDrawColor(80, 68, 35);
   doc.setLineWidth(0.5);
-  doc.line(17, pageHeight - 42, pageWidth - 17, pageHeight - 42);
+  doc.line(17, pageHeight - 44, pageWidth - 17, pageHeight - 44);
 
   doc.setTextColor(160, 160, 160);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
   const issueDate = student?.created_at
     ? new Date(student.created_at).toLocaleDateString('en-IN')
     : new Date().toLocaleDateString('en-IN');
   doc.text(
     `Date of Enrollment: ${issueDate}   •   Valid for Academic Year 2026-2027   •   Status: ${student?.status?.toUpperCase() || 'ACTIVE'}`,
-    26,
-    pageHeight - 29
+    24,
+    pageHeight - 31
   );
   doc.text(
     'Issued by The Fretboard Society Academy • Kolkata, India • Inquiries: codr.sankha.contact@gmail.com',
-    26,
-    pageHeight - 23
+    24,
+    pageHeight - 25
   );
 
-  // Security Seal / Stamp on Right
+  // Dedicated Director Signature & Verified Authentication Stamp
   doc.setDrawColor(212, 175, 55);
-  doc.setLineWidth(1);
-  doc.roundedRect(pageWidth - 75, pageHeight - 39, 48, 18, 2, 2, 'S');
+  doc.setLineWidth(0.8);
+  doc.roundedRect(pageWidth - 88, pageHeight - 42, 69, 23, 2, 2, 'S');
+
+  if (signData) {
+    try {
+      doc.addImage(signData, 'PNG', pageWidth - 76, pageHeight - 41, 44, 11);
+    } catch {}
+  }
+
+  // Signature Subtext
+  doc.setDrawColor(212, 175, 55);
+  doc.setLineWidth(0.3);
+  doc.line(pageWidth - 84, pageHeight - 29, pageWidth - 23, pageHeight - 29);
+
   doc.setTextColor(212, 175, 55);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text('OFFICIALLY SEALED', pageWidth - 51, pageHeight - 31, { align: 'center' });
-  doc.setFontSize(7);
+  doc.setFontSize(7.5);
+  doc.text('Sankha Subhra Ghosh', pageWidth - 53.5, pageHeight - 26, { align: 'center' });
+
+  doc.setFontSize(6.5);
   doc.setTextColor(175, 175, 175);
-  doc.text('TFS ACADEMY PORTAL', pageWidth - 51, pageHeight - 26, { align: 'center' });
+  doc.text('Founder & Lead Instructor • TFS', pageWidth - 53.5, pageHeight - 23, { align: 'center' });
+
+  doc.setFontSize(5.5);
+  doc.setTextColor(93, 211, 122);
+  doc.text('OFFICIALLY VERIFIED SIGNATURE', pageWidth - 53.5, pageHeight - 20.2, { align: 'center' });
 
   // Save the PDF
   const cleanName = displayName.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'Student';

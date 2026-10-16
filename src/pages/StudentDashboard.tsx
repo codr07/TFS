@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, ChangeEvent } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabaseAdmin } from '../lib/supabase';
 import {
@@ -7,6 +7,7 @@ import {
   BookOpen,
   Calendar,
   CalendarDays,
+  Camera,
   Check,
   ChevronDown,
   ChevronRight,
@@ -18,6 +19,7 @@ import {
   Edit3,
   Guitar,
   IdCard,
+  Lock,
   LogOut,
   Menu,
   MessageSquare,
@@ -25,7 +27,10 @@ import {
   Percent,
   QrCode,
   RefreshCw,
+  Save,
   Send,
+  ShieldCheck,
+  Upload,
   UserRound,
   X,
 } from 'lucide-react';
@@ -43,7 +48,11 @@ import {
   loadDiscounts,
   loadFeePlans,
   loadScheduleItems,
+  loadStudents,
   loadStoredFeePayments,
+  fetchFeePayments,
+  optimizeImageFile,
+  uploadImageToBucket,
   recordStudentPayment,
   updateStudentSelfProfile,
 } from '../lib/tfsData';
@@ -111,12 +120,13 @@ export const StudentDashboard = () => {
       const email = user.email || '';
 
       // 1. Load dynamic catalogs in parallel directly from Supabase
-      const [loadedPlans, loadedAddons, loadedCurrs, loadedSchedules, loadedDiscounts] = await Promise.all([
+      const [loadedPlans, loadedAddons, loadedCurrs, loadedSchedules, loadedDiscounts, loadedStudentsList] = await Promise.all([
         loadFeePlans(),
         loadAddOns(),
         loadCurriculumItems(),
         loadScheduleItems(),
         loadDiscounts(),
+        loadStudents(),
       ]);
 
       setFeePlans(loadedPlans);
@@ -131,14 +141,19 @@ export const StudentDashboard = () => {
       const defaultSchedule = loadedSchedules.find((s) => s.active !== false);
       const defaultScheduleSlot = defaultSchedule ? `${defaultSchedule.day_label} — ${defaultSchedule.time_label}` : 'Friday — 8:00 PM – 11:00 PM';
 
-      // 2. Fetch from student_profiles by email or ID
+      // 2. Match student from the centralized students catalog (controlled by admin)
+      const matchedAdminStudent = loadedStudentsList.find(
+        (s) => s.id === user.id || (s.email && s.email.toLowerCase() === email.toLowerCase())
+      );
+
+      // 3. Fetch from student_profiles by email or ID
       const { data: spData } = await supabaseAdmin
         .from('student_profiles')
         .select('*')
         .or(`email.eq.${email},id.eq.${user.id}`)
         .maybeSingle();
 
-      // 3. Fetch from profiles by ID
+      // 4. Fetch from profiles by ID
       const { data: pData } = await supabaseAdmin
         .from('profiles')
         .select('*')
@@ -210,21 +225,65 @@ export const StudentDashboard = () => {
         loadedProfile = newRecord;
       }
 
+      // Merge admin-controlled progress, feedback, badges, picture, and locked fees
+      if (matchedAdminStudent) {
+        loadedProfile = {
+          ...loadedProfile,
+          ...matchedAdminStudent,
+          first_name: matchedAdminStudent.first_name || loadedProfile.first_name,
+          last_name: matchedAdminStudent.last_name || loadedProfile.last_name,
+          avatar_url: matchedAdminStudent.avatar_url || spData?.avatar_url || (user.user_metadata?.avatar_url as string) || '',
+          monthly_fee: matchedAdminStudent.monthly_fee ?? loadedProfile.monthly_fee,
+          class_schedule: matchedAdminStudent.class_schedule || loadedProfile.class_schedule,
+          curriculum: matchedAdminStudent.curriculum || loadedProfile.curriculum,
+          preferred_schedule: matchedAdminStudent.preferred_schedule || loadedProfile.preferred_schedule,
+          addons: matchedAdminStudent.addons || loadedProfile.addons || [],
+          module_progress: matchedAdminStudent.module_progress || {},
+          overall_progress_pct: matchedAdminStudent.overall_progress_pct ?? 0,
+          instructor_feedback: matchedAdminStudent.instructor_feedback || '',
+          milestone_badges: matchedAdminStudent.milestone_badges || [],
+          bio: matchedAdminStudent.bio || (user.user_metadata?.bio as string) || '',
+          emergency_contact: matchedAdminStudent.emergency_contact || (user.user_metadata?.emergency_contact as string) || '',
+          emergency_phone: matchedAdminStudent.emergency_phone || (user.user_metadata?.emergency_phone as string) || '',
+        };
+      } else if (user.user_metadata?.avatar_url) {
+        loadedProfile.avatar_url = user.user_metadata.avatar_url as string;
+      }
+
       setStudent(loadedProfile);
 
-      // Load progress from localStorage
-      try {
-        const storedProg = localStorage.getItem(`tfs_progress_${user.id}`);
-        if (storedProg) {
-          setModuleProgress(JSON.parse(storedProg));
-        }
-      } catch {}
+      // Set module progress controlled by admin, with fallback to local store
+      let resolvedProgress: Record<string, 'not_started' | 'in_progress' | 'mastered'> = {};
+      if (loadedProfile.module_progress && Object.keys(loadedProfile.module_progress).length > 0) {
+        resolvedProgress = loadedProfile.module_progress;
+      } else {
+        try {
+          const storedProg = localStorage.getItem(`tfs_progress_${user.id}`);
+          if (storedProg) {
+            resolvedProgress = JSON.parse(storedProg);
+          }
+        } catch {}
+      }
+      setModuleProgress(resolvedProgress);
 
-      // 4. Load Student's Fee Payments (from Supabase payments table + local verified records)
+      // 4. Load Student's Fee Payments (from Supabase fee_payments + local cache)
       const allPayments = loadStoredFeePayments();
       const myFilteredPayments = allPayments.filter(
         (p) => p.student_email && p.student_email.toLowerCase() === email.toLowerCase()
       );
+      fetchFeePayments().then((remoteAll) => {
+        const studentRemote = remoteAll.filter(
+          (p) => p.student_email && p.student_email.toLowerCase() === email.toLowerCase()
+        );
+        if (studentRemote.length > 0) {
+          setMyPayments((prev) => {
+            const map = new Map<string, FeePaymentRecord>();
+            studentRemote.forEach((r) => map.set(r.payment_reference, r));
+            prev.forEach((r) => { if (!map.has(r.payment_reference)) map.set(r.payment_reference, r); });
+            return Array.from(map.values());
+          });
+        }
+      }).catch(() => {});
 
       // Also check Supabase payments table
       try {
@@ -473,9 +532,28 @@ export const StudentDashboard = () => {
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Sync Database
             </button>
-            <div className="student-profile">
-              <UserRound size={17} /> {user?.email}
+            <div className="student-profile" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <div className="portal-avatar-wrap" style={{ width: '32px', height: '32px' }}>
+                {student?.avatar_url ? (
+                  <img src={student.avatar_url} alt={displayName} className="portal-avatar-img" />
+                ) : (
+                  <div className="portal-avatar-initials" style={{ width: '32px', height: '32px', fontSize: '0.8rem' }}>
+                    {(student?.first_name || user?.email || 'S').charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <span style={{ maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user?.email}
+              </span>
             </div>
+            <button
+              type="button"
+              className="portal-btn-secondary"
+              onClick={signOut}
+              style={{ padding: '0.45rem 0.85rem', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <LogOut size={14} /> Sign out
+            </button>
           </div>
         </header>
 
@@ -526,11 +604,12 @@ export const StudentDashboard = () => {
             addOnsList={addOnsList}
             scheduleList={scheduleList}
             curriculumList={curriculumList}
+            onNavigateToRequests={() => setTab('requests')}
             onSaveProfile={async (updates) => {
               try {
                 const saved = await updateStudentSelfProfile(student.id, student.email, updates);
                 setStudent(saved);
-                notify('Your dynamic profile has been updated and synchronized with Supabase.');
+                notify('Your profile and picture have been updated and synchronized with Supabase.');
               } catch {
                 fail('Failed to update profile. Please try again.');
               }
@@ -538,7 +617,7 @@ export const StudentDashboard = () => {
           />
         )}
 
-        {/* 4. TUITION & PAYMENTS TAB */}
+        {/* 4. TUITION & PAYMENTS TAB (Locked to Profile Data, Request Only) */}
         {tab === 'payments' && (
           <TuitionPaymentsTab
             student={student}
@@ -548,19 +627,7 @@ export const StudentDashboard = () => {
             discountsList={discountsList}
             payments={myPayments}
             onOpenPayModal={() => setShowPayModal(true)}
-            onPlanChange={async (newPlanName, newAddons) => {
-              if (!student) return;
-              try {
-                const updated = await updateStudentSelfProfile(student.id, student.email, {
-                  class_schedule: newPlanName,
-                  addons: newAddons,
-                });
-                setStudent(updated);
-                notify(`Tuition plan updated to ${newPlanName}`);
-              } catch {
-                fail('Failed to update tuition plan.');
-              }
-            }}
+            onNavigateToRequests={() => setTab('requests')}
           />
         )}
 
@@ -902,10 +969,26 @@ const StudentIdCardTab = ({
   const cardRef = useRef<HTMLDivElement>(null);
   const [downloading, setDownloading] = useState(false);
 
-  // High-Res 1200x750 PNG Export
-  const handleDownloadCard = () => {
+  // Helper to load image for canvas
+  const loadImage = (src: string): Promise<HTMLImageElement> =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to load: ' + src));
+      img.src = src;
+    });
+
+  // High-Res 1200x750 PNG Export with TFS Logo & Official Verified Signature
+  const handleDownloadCard = async () => {
     setDownloading(true);
     try {
+      const [logoImg, signImg, avatarImg] = await Promise.all([
+        loadImage('/images/logo_t.png').catch(() => null),
+        loadImage('/images/sign.png').catch(() => null),
+        student?.avatar_url ? loadImage(student.avatar_url).catch(() => null) : Promise.resolve(null),
+      ]);
+
       const canvas = document.createElement('canvas');
       const w = 1200;
       const h = 750;
@@ -918,15 +1001,15 @@ const StudentIdCardTab = ({
         return;
       }
 
-      // Background
+      // Deep dark luxury background
       const grad = ctx.createLinearGradient(0, 0, w, h);
-      grad.addColorStop(0, '#101216');
-      grad.addColorStop(0.5, '#171920');
-      grad.addColorStop(1, '#0c0d10');
+      grad.addColorStop(0, '#0f1116');
+      grad.addColorStop(0.5, '#171922');
+      grad.addColorStop(1, '#0b0c0f');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      // Gold Borders
+      // Gold Outer Borders
       ctx.lineWidth = 14;
       ctx.strokeStyle = '#d4af37';
       ctx.strokeRect(20, 20, w - 40, h - 40);
@@ -937,21 +1020,27 @@ const StudentIdCardTab = ({
 
       // Header Bar
       ctx.fillStyle = 'rgba(212, 175, 55, 0.08)';
-      ctx.fillRect(40, 40, w - 80, 110);
+      ctx.fillRect(40, 40, w - 80, 115);
+
+      let headerStartX = 70;
+      if (logoImg) {
+        ctx.drawImage(logoImg, 60, 48, 92, 92);
+        headerStartX = 175;
+      }
 
       ctx.fillStyle = '#d4af37';
       ctx.font = 'bold 36px "Playfair Display", Georgia, serif';
-      ctx.fillText('THE FRETBOARD SOCIETY', 70, 95);
+      ctx.fillText('THE FRETBOARD SOCIETY', headerStartX, 98);
 
       ctx.fillStyle = '#9e9fa5';
-      ctx.font = '600 18px "Inter", sans-serif';
-      ctx.fillText('ACOUSTIC GUITAR & UKULELE MASTERY • OFFICIAL STUDENT PASS', 70, 130);
+      ctx.font = '600 17px "Inter", sans-serif';
+      ctx.fillText('ACOUSTIC GUITAR & UKULELE MASTERY • OFFICIAL SCHOLAR PASS', headerStartX, 134);
 
-      // Verified Badge
+      // Verified Badge on Right
       ctx.fillStyle = '#5dd37a';
       ctx.font = 'bold 20px "Inter", sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText('VERIFIED STUDENT', w - 70, 95);
+      ctx.fillText('● VERIFIED SCHOLAR', w - 70, 95);
 
       ctx.fillStyle = '#d4af37';
       ctx.font = '600 22px monospace';
@@ -962,68 +1051,131 @@ const StudentIdCardTab = ({
       ctx.strokeStyle = 'rgba(212, 175, 55, 0.3)';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(40, 150);
-      ctx.lineTo(w - 40, 150);
+      ctx.moveTo(40, 155);
+      ctx.lineTo(w - 40, 155);
       ctx.stroke();
 
       // Left Photo Box
       ctx.fillStyle = 'rgba(212, 175, 55, 0.08)';
-      ctx.fillRect(70, 190, 280, 360);
+      ctx.fillRect(70, 185, 280, 360);
       ctx.lineWidth = 4;
       ctx.strokeStyle = '#d4af37';
-      ctx.strokeRect(70, 190, 280, 360);
+      ctx.strokeRect(70, 185, 280, 360);
 
-      ctx.fillStyle = '#d4af37';
-      ctx.font = 'bold 80px "Inter", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('🎸', 210, 380);
+      if (avatarImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(74, 189, 272, 352);
+        ctx.clip();
+        ctx.drawImage(avatarImg, 74, 189, 272, 352);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = '#d4af37';
+        ctx.font = 'bold 80px "Inter", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('🎸', 210, 375);
 
-      ctx.font = '600 20px "Inter", sans-serif';
-      ctx.fillText('TFS SCHOLAR', 210, 470);
-      ctx.textAlign = 'left';
+        ctx.font = 'bold 20px "Inter", sans-serif';
+        ctx.fillText('TFS SCHOLAR', 210, 460);
+
+        ctx.font = '14px "Inter", sans-serif';
+        ctx.fillStyle = '#9e9fa5';
+        ctx.fillText('★ ★ ★ ★ ★', 210, 495);
+        ctx.textAlign = 'left';
+      }
 
       // Right Details
-      const startX = 400;
-      let curY = 220;
+      const startX = 390;
+      let curY = 215;
 
       const drawField = (label: string, value: string, color = '#ffffff') => {
         ctx.fillStyle = '#9e9fa5';
-        ctx.font = '600 18px "Inter", sans-serif';
+        ctx.font = '600 17px "Inter", sans-serif';
         ctx.fillText(label.toUpperCase(), startX, curY);
 
         ctx.fillStyle = color;
-        ctx.font = 'bold 28px "Inter", sans-serif';
-        ctx.fillText(value, startX, curY + 36);
+        ctx.font = 'bold 26px "Inter", sans-serif';
+        ctx.fillText(value, startX, curY + 34);
 
-        curY += 80;
+        // subtle underline
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(startX, curY + 44);
+        ctx.lineTo(w - 70, curY + 44);
+        ctx.stroke();
+
+        curY += 76;
       };
 
       drawField('Full Student Name', displayName, '#ffffff');
       drawField('Curriculum / Track', student?.curriculum || 'Acoustic Guitar', '#d4af37');
-      drawField('Tuition Plan', `${dynamicFeeSummary.basePlanName} — ₹${dynamicFeeSummary.totalAmount}/mo`, '#ffffff');
-      drawField('Schedule Window', student?.preferred_schedule || 'Weekend Batch Slot', '#5dd37a');
+      drawField('Enrolled Tuition Plan', `${dynamicFeeSummary.basePlanName} — ₹${dynamicFeeSummary.totalAmount}/mo`, '#ffffff');
+      drawField('Batch Schedule Slot', student?.preferred_schedule || 'Weekend Scheduled Slot', '#5dd37a');
 
-      // Footer
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-      ctx.lineWidth = 1;
+      // Footer Divider
+      ctx.strokeStyle = 'rgba(212, 175, 55, 0.25)';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(40, 600);
-      ctx.lineTo(w - 40, 600);
+      ctx.moveTo(40, 580);
+      ctx.lineTo(w - 40, 580);
       ctx.stroke();
 
+      // Footer Left - Metadata
       ctx.fillStyle = '#9e9fa5';
-      ctx.font = '16px "Inter", sans-serif';
-      ctx.fillText(`Issued: ${new Date(student?.created_at || Date.now()).toLocaleDateString('en-IN')}  •  Valid Academic Year 2026-2027`, 70, 645);
-      ctx.fillText('Issued by The Fretboard Society Academy • Kolkata, India', 70, 680);
+      ctx.font = '15px "Inter", sans-serif';
+      ctx.fillText(`Date of Issue: ${new Date(student?.created_at || Date.now()).toLocaleDateString('en-IN')}  •  Valid Academic Year 2026-2027`, 65, 618);
+      ctx.fillText('Issued by The Fretboard Society Academy • Kolkata, India', 65, 646);
+      ctx.fillStyle = '#d4af37';
+      ctx.fillText(`Scholar Contact: ${student?.phone_number || student?.email || 'Academy Member'}`, 65, 674);
 
-      // Barcode
+      // Barcode at bottom-left
       ctx.fillStyle = '#ffffff';
-      let barcodeX = w - 420;
+      let barcodeX = 65;
       const barcodeWidths = [3, 6, 2, 8, 4, 2, 7, 3, 5, 2, 6, 4, 8, 2, 5, 3, 7, 4, 3, 6, 2, 8, 3, 5, 2, 6, 4, 7, 2, 5];
       for (const bw of barcodeWidths) {
-        ctx.fillRect(barcodeX, 630, bw, 45);
+        ctx.fillRect(barcodeX, 695, bw, 20);
         barcodeX += bw + 3;
       }
+
+      // Footer Right - Verified Signature Box
+      const sigBoxW = 340;
+      const sigBoxH = 125;
+      const sigBoxX = w - 400;
+      const sigBoxY = 595;
+
+      ctx.fillStyle = 'rgba(212, 175, 55, 0.05)';
+      ctx.fillRect(sigBoxX, sigBoxY, sigBoxW, sigBoxH);
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = 'rgba(212, 175, 55, 0.6)';
+      ctx.strokeRect(sigBoxX, sigBoxY, sigBoxW, sigBoxH);
+      ctx.setLineDash([]); // Reset dash
+
+      if (signImg) {
+        ctx.drawImage(signImg, sigBoxX + (sigBoxW - 170) / 2, sigBoxY + 8, 170, 50);
+      }
+
+      ctx.strokeStyle = 'rgba(212, 175, 55, 0.4)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sigBoxX + 20, sigBoxY + 66);
+      ctx.lineTo(sigBoxX + sigBoxW - 20, sigBoxY + 66);
+      ctx.stroke();
+
+      ctx.fillStyle = '#d4af37';
+      ctx.font = 'bold 15px "Inter", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Sankha Subhra Ghosh', sigBoxX + sigBoxW / 2, sigBoxY + 85);
+
+      ctx.fillStyle = '#9e9fa5';
+      ctx.font = '12px "Inter", sans-serif';
+      ctx.fillText('Founder & Lead Instructor • TFS', sigBoxX + sigBoxW / 2, sigBoxY + 101);
+
+      ctx.fillStyle = '#5dd37a';
+      ctx.font = 'bold 11px "Inter", sans-serif';
+      ctx.fillText('OFFICIALLY VERIFIED SIGNATURE', sigBoxX + sigBoxW / 2, sigBoxY + 116);
+      ctx.textAlign = 'left';
 
       const dataUrl = canvas.toDataURL('image/png');
       const link = document.createElement('a');
@@ -1038,14 +1190,14 @@ const StudentIdCardTab = ({
   };
 
   return (
-    <div style={{ maxWidth: '850px', margin: '0 auto' }}>
+    <div style={{ maxWidth: '900px', margin: '0 auto', width: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <p className="student-kicker">Digital Identification</p>
           <h2>Official Student ID Pass</h2>
           <p className="student-muted">Your verified pass for classes, studio workshops, and rehearsal sessions.</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           <button className="admission-secondary" onClick={onOpenEditModal}>
             <Edit3 size={16} /> Edit Pass Details
           </button>
@@ -1068,102 +1220,123 @@ const StudentIdCardTab = ({
       <div
         ref={cardRef}
         style={{
-          background: 'linear-gradient(135deg, #13151b 0%, #1c1f26 50%, #0d0e12 100%)',
-          borderRadius: '16px',
+          background: 'linear-gradient(135deg, #111319 0%, #1a1d26 50%, #0c0d11 100%)',
+          borderRadius: '20px',
           border: '2px solid var(--gold)',
-          boxShadow: '0 20px 50px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(212,175,55,0.3)',
-          padding: 'clamp(1.5rem, 4vw, 2.5rem)',
+          boxShadow: '0 25px 60px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(212,175,55,0.3)',
+          padding: 'clamp(1.25rem, 3.5vw, 2.5rem)',
           position: 'relative',
           overflow: 'hidden',
+          width: '100%',
+          boxSizing: 'border-box',
         }}
       >
         <div style={{ position: 'absolute', right: '-30px', bottom: '-40px', opacity: 0.05, pointerEvents: 'none' }}>
           <Guitar size={320} />
         </div>
 
-        {/* Card Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid rgba(212,175,55,0.3)', paddingBottom: '1.25rem', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'rgba(212,175,55,0.15)', border: '1px solid var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gold)' }}>
-              <Guitar size={28} />
+        {/* Card Header with Official TFS Logo */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(212,175,55,0.3)', paddingBottom: '1.25rem', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: 'rgba(212,175,55,0.12)', border: '1px solid var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4px', flexShrink: 0 }}>
+              <img
+                src="/images/logo_t.png"
+                alt="The Fretboard Society Logo"
+                style={{ width: '100%', height: '100%', objectFit: 'contain', filter: 'drop-shadow(0 0 8px rgba(212,175,55,0.4))' }}
+              />
             </div>
             <div>
-              <h3 style={{ margin: 0, color: 'var(--gold)', letterSpacing: '0.08em', fontSize: '1.35rem' }}>
+              <h3 style={{ margin: 0, color: 'var(--gold)', letterSpacing: '0.08em', fontSize: 'clamp(1.15rem, 2.5vw, 1.45rem)', fontWeight: 800 }}>
                 THE FRETBOARD SOCIETY
               </h3>
-              <small style={{ color: 'var(--text-secondary)', letterSpacing: '0.12em', fontSize: '0.72rem', textTransform: 'uppercase' }}>
+              <small style={{ color: 'var(--text-secondary)', letterSpacing: '0.12em', fontSize: '0.72rem', textTransform: 'uppercase', display: 'block', marginTop: '0.15rem' }}>
                 Acoustic Guitar &amp; Ukulele Academy
               </small>
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <span className="booking-badge" style={{ background: '#5dd37a22', color: '#5dd37a', border: '1px solid #5dd37a55', display: 'inline-block', marginBottom: '0.25rem' }}>
-              ● Verified Member
+              ● Verified Scholar
             </span>
-            <div style={{ color: 'var(--gold)', fontFamily: 'monospace', fontSize: '0.9rem', fontWeight: 700 }}>
+            <div style={{ color: 'var(--gold)', fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 700 }}>
               {studentIdBadge}
             </div>
           </div>
         </div>
 
-        {/* Card Body */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 180px) 1fr', gap: 'clamp(1.25rem, 3vw, 2.5rem)', alignItems: 'center' }}>
-          <div style={{ textAlign: 'center' }}>
+        {/* Card Body with Responsive Grid (No Overflows) */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'clamp(1.25rem, 3vw, 2rem)', alignItems: 'center' }}>
+          <div style={{ textAlign: 'center', maxWidth: '190px', width: '100%', margin: '0 auto' }}>
             <div
               style={{
                 width: '100%',
                 aspectRatio: '1 / 1.15',
-                borderRadius: '12px',
-                background: 'linear-gradient(145deg, #1a1c22, #0e1014)',
-                border: '2px solid rgba(212,175,55,0.5)',
+                borderRadius: '14px',
+                background: 'linear-gradient(145deg, #1a1c24, #0e1015)',
+                border: '2px solid rgba(212,175,55,0.6)',
+                boxShadow: '0 8px 25px rgba(0,0,0,0.5)',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '0.5rem',
                 color: 'var(--gold)',
+                overflow: 'hidden',
               }}
             >
-              <Music size={46} />
-              <span style={{ fontSize: '0.75rem', letterSpacing: '0.15em', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                TFS SCHOLAR
-              </span>
+              {student?.avatar_url ? (
+                <img
+                  src={student.avatar_url}
+                  alt={displayName}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <>
+                  <Music size={44} />
+                  <span style={{ fontSize: '0.72rem', letterSpacing: '0.15em', fontWeight: 700, color: 'var(--gold)' }}>
+                    TFS SCHOLAR
+                  </span>
+                  <span style={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.5)', letterSpacing: '0.08em' }}>
+                    ★ ★ ★ ★ ★
+                  </span>
+                </>
+              )}
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1.25rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1.25rem', flex: 1 }}>
             <div>
-              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 Student Name
               </p>
-              <b style={{ color: '#fff', fontSize: '1.25rem' }}>{displayName}</b>
+              <b style={{ color: '#fff', fontSize: '1.2rem', display: 'block' }}>{displayName}</b>
             </div>
 
             <div>
-              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 Curriculum Track
               </p>
-              <b style={{ color: 'var(--gold)', fontSize: '1.15rem' }}>{student?.curriculum || 'Guitar'}</b>
+              <b style={{ color: 'var(--gold)', fontSize: '1.1rem', display: 'block' }}>{student?.curriculum || 'Guitar'}</b>
             </div>
 
             <div>
-              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 Tuition Plan
               </p>
-              <b style={{ color: '#fff', fontSize: '0.95rem' }}>{dynamicFeeSummary.basePlanName}</b>
+              <b style={{ color: '#fff', fontSize: '0.92rem', display: 'block' }}>{dynamicFeeSummary.basePlanName}</b>
             </div>
 
             <div>
-              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <p style={{ margin: '0 0 0.2rem', color: 'var(--text-secondary)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 Schedule Window
               </p>
-              <b style={{ color: '#5dd37a', fontSize: '0.95rem' }}>{student?.preferred_schedule || 'Weekend Session'}</b>
+              <b style={{ color: '#5dd37a', fontSize: '0.92rem', display: 'block' }}>{student?.preferred_schedule || 'Weekend Session'}</b>
             </div>
           </div>
         </div>
 
-        {/* Card Footer */}
-        <div style={{ marginTop: '2rem', paddingTop: '1.25rem', borderTop: '1px solid rgba(255,255,255,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        {/* Card Footer with Verified Director Signature */}
+        <div style={{ marginTop: '2rem', paddingTop: '1.25rem', borderTop: '1px solid rgba(255,255,255,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1.25rem' }}>
           <div>
             <small style={{ color: 'var(--text-secondary)', display: 'block', fontSize: '0.72rem' }}>
               Academic Year 2026–2027 • The Fretboard Society Academy
@@ -1172,8 +1345,44 @@ const StudentIdCardTab = ({
               Contact: {student?.phone_number || student?.email}
             </small>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: 0.8 }}>
-            <QrCode size={34} style={{ color: 'var(--gold)' }} />
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap' }}>
+            {/* Official Director Signature Stamp Box */}
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                background: 'rgba(212, 175, 55, 0.05)',
+                border: '1px dashed rgba(212, 175, 55, 0.45)',
+                borderRadius: '8px',
+                padding: '0.35rem 0.85rem',
+                minWidth: '155px',
+              }}
+            >
+              <img
+                src="/images/sign.png"
+                alt="Director's Signature"
+                style={{
+                  height: '36px',
+                  maxWidth: '130px',
+                  objectFit: 'contain',
+                  filter: 'invert(1) brightness(1.7) contrast(1.15) drop-shadow(0 0 2px rgba(212,175,55,0.5))',
+                }}
+              />
+              <div style={{ borderTop: '1px solid rgba(212, 175, 55, 0.4)', width: '100%', marginTop: '0.15rem', paddingTop: '0.2rem', textAlign: 'center' }}>
+                <span style={{ color: 'var(--gold)', fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', display: 'block' }}>
+                  Sankha Subhra Ghosh
+                </span>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.58rem', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                  Authorized Signatory • Director
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: 0.85 }}>
+              <QrCode size={36} style={{ color: 'var(--gold)' }} />
+            </div>
           </div>
         </div>
       </div>
@@ -1182,7 +1391,7 @@ const StudentIdCardTab = ({
 };
 
 // =========================================================================
-// 3. EDIT PROFILE & ACCOUNT TAB
+// 3. EDIT PROFILE & ACCOUNT TAB (With Picture Upload & Locked Tuition Plan)
 // =========================================================================
 const ProfileEditTab = ({
   student,
@@ -1190,6 +1399,7 @@ const ProfileEditTab = ({
   addOnsList,
   scheduleList,
   curriculumList,
+  onNavigateToRequests,
   onSaveProfile,
 }: {
   student: StudentProfile;
@@ -1197,6 +1407,7 @@ const ProfileEditTab = ({
   addOnsList: AddOn[];
   scheduleList: ScheduleItem[];
   curriculumList: CurriculumItem[];
+  onNavigateToRequests?: () => void;
   onSaveProfile: (updates: Partial<StudentProfile>) => Promise<void>;
 }) => {
   const [firstName, setFirstName] = useState(student.first_name || '');
@@ -1204,6 +1415,13 @@ const ProfileEditTab = ({
   const [phoneNumber, setPhoneNumber] = useState(student.phone_number || '');
   const [profession, setProfession] = useState(student.profession || '');
   const [address, setAddress] = useState(student.address || '');
+  const [bio, setBio] = useState(student.bio || '');
+  const [emergencyContact, setEmergencyContact] = useState(student.emergency_contact || '');
+  const [emergencyPhone, setEmergencyPhone] = useState(student.emergency_phone || '');
+  const [avatarUrl, setAvatarUrl] = useState(student.avatar_url || '');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   // Dynamic track options from curriculumList
   const dynamicTracks = useMemo(() => {
@@ -1217,13 +1435,26 @@ const ProfileEditTab = ({
   }, [curriculumList]);
 
   const [curriculum, setCurriculum] = useState(student.curriculum || 'Guitar');
-  const [classSchedule, setClassSchedule] = useState(student.class_schedule || (feePlans[0] ? `${feePlans[0].name} — ₹${feePlans[0].amount}/month` : 'Home Visit — ₹1,500/month'));
+  const classSchedule = student.class_schedule || (feePlans[0] ? `${feePlans[0].name} — ₹${feePlans[0].amount}/month` : 'Home Visit — ₹1,500/month');
   const [preferredSchedule, setPreferredSchedule] = useState(
     student.preferred_schedule || (scheduleList[0] ? `${scheduleList[0].day_label} — ${scheduleList[0].time_label}` : 'Friday — 8:00 PM – 11:00 PM')
   );
 
-  const [selectedAddon, setSelectedAddon] = useState(student.addons?.[0] || 'None');
   const [saving, setSaving] = useState(false);
+
+  const handlePhotoSelect = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const bucketUrl = await uploadImageToBucket(file, 'students');
+      setAvatarUrl(bucketUrl);
+    } catch (err) {
+      console.error('Error uploading photo:', err);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -1234,16 +1465,18 @@ const ProfileEditTab = ({
       phone_number: phoneNumber.trim(),
       profession: profession.trim(),
       address: address.trim(),
+      bio: bio.trim(),
+      emergency_contact: emergencyContact.trim(),
+      emergency_phone: emergencyPhone.trim(),
+      avatar_url: avatarUrl,
       curriculum,
-      class_schedule: classSchedule,
       preferred_schedule: preferredSchedule,
-      addons: selectedAddon !== 'None' ? [selectedAddon] : [],
     });
     setSaving(false);
   };
 
   return (
-    <div style={{ maxWidth: '750px', margin: '0 auto' }}>
+    <div style={{ maxWidth: '780px', margin: '0 auto' }}>
       <section className="student-panel">
         <div className="student-panel-heading">
           <div>
@@ -1253,10 +1486,71 @@ const ProfileEditTab = ({
           <UserRound size={22} style={{ color: 'var(--gold)' }} />
         </div>
         <p className="student-muted" style={{ marginBottom: '1.75rem' }}>
-          All details, curriculum selections, and schedule windows update live in Supabase.
+          Personal details, photo, and preferences update instantly in your database record.
         </p>
 
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+        {/* Profile Picture Upload Card */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '1.5rem',
+            padding: '1.25rem',
+            borderRadius: '12px',
+            background: 'rgba(212,175,55,0.06)',
+            border: '1px solid rgba(212,175,55,0.25)',
+            marginBottom: '1.75rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div className="portal-avatar-wrap" style={{ width: '84px', height: '84px' }}>
+            {avatarUrl ? (
+              <img src={avatarUrl} alt="Avatar" className="portal-avatar-img" />
+            ) : (
+              <div className="portal-avatar-initials" style={{ width: '84px', height: '84px', fontSize: '2rem' }}>
+                {(firstName || student.first_name || 'S').charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
+          <div style={{ flex: '1 1 240px' }}>
+            <b style={{ color: '#fff', fontSize: '1.05rem', display: 'block', marginBottom: '0.25rem' }}>
+              Student Profile Picture &amp; Pass Photo
+            </b>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: '0 0 0.75rem' }}>
+              Your photo is displayed on your Official Student Pass, header, and instructor portfolio.
+            </p>
+            <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handlePhotoSelect}
+                style={{ display: 'none' }}
+              />
+              <button
+                type="button"
+                className="portal-btn-secondary"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingPhoto}
+                style={{ padding: '0.5rem 1rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <Camera size={15} /> {uploadingPhoto ? 'Processing...' : avatarUrl ? 'Change Photo' : 'Upload Photo'}
+              </button>
+              {avatarUrl && (
+                <button
+                  type="button"
+                  className="portal-btn-secondary"
+                  onClick={() => setAvatarUrl('')}
+                  style={{ padding: '0.5rem 0.85rem', fontSize: '0.82rem', color: '#ff6b6b', borderColor: 'rgba(220,53,69,0.3)' }}
+                >
+                  <X size={14} /> Remove
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1.25rem' }}>
           <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             First Name *
             <input
@@ -1314,24 +1608,44 @@ const ProfileEditTab = ({
             </select>
           </label>
 
-          {/* Dynamic Tuition Plan Selection */}
-          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--gold)', fontWeight: 600 }}>
-            Tuition Plan (Database Synced) *
-            <select
-              value={classSchedule}
-              onChange={(e) => setClassSchedule(e.target.value)}
-              style={{ padding: '0.85rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+          {/* LOCKED TUITION PLAN (Per Requirement: Cannot be changed from portal; request only) */}
+          <div style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--gold)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <Lock size={14} /> Fixed Tuition Plan (Academy Enrolment)
+            </span>
+            <div
+              style={{
+                padding: '0.85rem',
+                background: 'rgba(212,175,55,0.06)',
+                border: '1px solid rgba(212,175,55,0.25)',
+                borderRadius: '8px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '0.75rem',
+              }}
             >
-              {feePlans.map((p) => {
-                const label = `${p.name} — ₹${p.amount.toLocaleString('en-IN')}/${p.billing_period || 'month'}`;
-                return (
-                  <option key={p.id} value={label}>
-                    {label}
-                  </option>
-                );
-              })}
-            </select>
-          </label>
+              <div>
+                <b style={{ color: '#fff', fontSize: '0.92rem', display: 'block' }}>{classSchedule}</b>
+                <small style={{ color: 'var(--gold)' }}>
+                  ₹{(student.monthly_fee || 1500).toLocaleString('en-IN')}/month
+                </small>
+              </div>
+              {onNavigateToRequests && (
+                <button
+                  type="button"
+                  className="student-text-button"
+                  onClick={onNavigateToRequests}
+                  style={{ fontSize: '0.78rem', color: 'var(--gold)', textDecoration: 'underline', padding: 0 }}
+                >
+                  Request Change →
+                </button>
+              )}
+            </div>
+            <small style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+              Tuition fee is fixed for your profile. To switch fee tiers or plans, submit a request.
+            </small>
+          </div>
 
           {/* Dynamic Batch Schedule Window Selection */}
           <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--gold)', fontWeight: 600 }}>
@@ -1349,23 +1663,6 @@ const ProfileEditTab = ({
                   </option>
                 );
               })}
-            </select>
-          </label>
-
-          {/* Dynamic Optional Add-on Elective */}
-          <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            Optional Add-On Elective (Database Synced)
-            <select
-              value={selectedAddon}
-              onChange={(e) => setSelectedAddon(e.target.value)}
-              style={{ padding: '0.85rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
-            >
-              <option value="None">None (Standard Enrolment)</option>
-              {addOnsList.map((a) => (
-                <option key={a.id} value={a.name}>
-                  {a.name} — ₹{a.amount.toLocaleString('en-IN')}/month ({a.description})
-                </option>
-              ))}
             </select>
           </label>
 
@@ -1389,9 +1686,41 @@ const ProfileEditTab = ({
             />
           </label>
 
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Emergency Contact Name
+            <input
+              placeholder="Parent / Guardian / Spouse"
+              value={emergencyContact}
+              onChange={(e) => setEmergencyContact(e.target.value)}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            />
+          </label>
+
+          <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Emergency Phone Number
+            <input
+              type="tel"
+              placeholder="+91 98765 00000"
+              value={emergencyPhone}
+              onChange={(e) => setEmergencyPhone(e.target.value)}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+            />
+          </label>
+
+          <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Bio / Musical Experience
+            <textarea
+              rows={2}
+              placeholder="Tell your instructor about your musical background, favorite artists, or instruments you play."
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              style={{ padding: '0.85rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', font: 'inherit', resize: 'vertical' }}
+            />
+          </label>
+
           <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', marginTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1.25rem' }}>
-            <button className="admin-save" type="submit" disabled={saving} style={{ margin: 0 }}>
-              {saving ? 'Syncing with Database...' : 'Save Profile Changes'}
+            <button className="student-save-btn" type="submit" disabled={saving}>
+              <Check size={18} /> {saving ? 'Syncing with Database...' : 'Save Profile Changes'}
             </button>
           </div>
         </form>
@@ -1401,7 +1730,7 @@ const ProfileEditTab = ({
 };
 
 // =========================================================================
-// 4. TUITION & PAYMENTS TAB
+// 4. TUITION & PAYMENTS TAB (Locked to Profile Data, Request Only)
 // =========================================================================
 const TuitionPaymentsTab = ({
   student,
@@ -1411,7 +1740,7 @@ const TuitionPaymentsTab = ({
   discountsList = [],
   payments,
   onOpenPayModal,
-  onPlanChange,
+  onNavigateToRequests,
 }: {
   student: StudentProfile | null;
   dynamicFeeSummary: {
@@ -1426,30 +1755,12 @@ const TuitionPaymentsTab = ({
   discountsList?: any[];
   payments: FeePaymentRecord[];
   onOpenPayModal: () => void;
-  onPlanChange: (planName: string, addons: string[]) => Promise<void>;
+  onNavigateToRequests?: () => void;
 }) => {
   const [couponCode, setCouponCode] = useState('');
   const [discountAmount, setDiscountAmount] = useState(0);
   const [couponMsg, setCouponMsg] = useState('');
   const [validating, setValidating] = useState(false);
-
-  // Quick Plan Switcher State
-  const initialPlanId = useMemo(() => {
-    if (feePlans.length > 0 && student) {
-      const match = feePlans.find(
-        (p) => student.class_schedule.toLowerCase().includes(p.name.toLowerCase()) ||
-               p.name.toLowerCase().includes(student.class_schedule.toLowerCase())
-      );
-      if (match) return match.id;
-      return feePlans[0].id;
-    }
-    return '';
-  }, [feePlans, student]);
-
-  const [userSelectedPlanId, setUserSelectedPlanId] = useState<string | null>(null);
-  const selectedPlanId = userSelectedPlanId ?? initialPlanId;
-  const [selectedAddonIds, setSelectedAddonIds] = useState<string[]>([]);
-  const [savingPlan, setSavingPlan] = useState(false);
 
   const handleApplyCoupon = async (e: FormEvent) => {
     e.preventDefault();
@@ -1493,22 +1804,6 @@ const TuitionPaymentsTab = ({
     }
   };
 
-  const handleApplyPlanCustomization = async () => {
-    const chosenPlan = feePlans.find((p) => p.id === selectedPlanId) || feePlans[0];
-    if (!chosenPlan) return;
-
-    const chosenAddonNames = addOnsList
-      .filter((a) => selectedAddonIds.includes(a.id))
-      .map((a) => a.name);
-
-    setSavingPlan(true);
-    await onPlanChange(
-      `${chosenPlan.name} — ₹${chosenPlan.amount.toLocaleString('en-IN')}/${chosenPlan.billing_period || 'month'}`,
-      chosenAddonNames
-    );
-    setSavingPlan(false);
-  };
-
   const finalDue = Math.max(0, dynamicFeeSummary.totalAmount - discountAmount);
 
   return (
@@ -1532,7 +1827,7 @@ const TuitionPaymentsTab = ({
                 : `${dynamicFeeSummary.basePlanName}${dynamicFeeSummary.addonAmount > 0 ? ` + ₹${dynamicFeeSummary.addonAmount} add-ons` : ''}`}
             </small>
           </div>
-          <button className="student-action" style={{ margin: 0, width: 'auto', background: 'var(--gold)', color: '#000', fontWeight: 'bold' }} onClick={onOpenPayModal}>
+          <button className="student-save-btn" style={{ margin: 0, width: 'auto' }} onClick={onOpenPayModal}>
             Pay Tuition Online <CircleDollarSign size={16} />
           </button>
         </div>
@@ -1554,7 +1849,7 @@ const TuitionPaymentsTab = ({
               font: 'inherit',
             }}
           />
-          <button className="student-action" type="submit" disabled={validating} style={{ margin: 0, width: 'auto' }}>
+          <button className="portal-btn-secondary" type="submit" disabled={validating} style={{ margin: 0, width: 'auto' }}>
             {validating ? 'Verifying...' : 'Apply Coupon'}
           </button>
         </form>
@@ -1592,98 +1887,77 @@ const TuitionPaymentsTab = ({
         )}
       </section>
 
-      {/* Dynamic Plan Switcher / Fee Breakdown */}
-      <section className="student-panel" style={{ marginBottom: '1.5rem' }}>
-        <p className="student-kicker">Live Catalog Options</p>
-        <h3>Tuition Plan &amp; Add-on Customizer</h3>
-        <p className="student-muted" style={{ marginBottom: '1.25rem' }}>
-          Switch between available academy plans directly loaded from Supabase.
-        </p>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
-          {feePlans.map((plan) => {
-            const isSelected = selectedPlanId === plan.id;
-            return (
-              <div
-                key={plan.id}
-                onClick={() => setUserSelectedPlanId(plan.id)}
-                style={{
-                  padding: '1.15rem',
-                  borderRadius: '10px',
-                  background: isSelected ? 'rgba(212,175,55,0.12)' : 'rgba(255,255,255,0.03)',
-                  border: isSelected ? '2px solid var(--gold)' : '1px solid rgba(255,255,255,0.08)',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <b style={{ color: isSelected ? 'var(--gold)' : '#fff', fontSize: '1.05rem' }}>{plan.name}</b>
-                  {isSelected && <Check size={18} style={{ color: 'var(--gold)' }} />}
-                </div>
-                <p style={{ margin: '0.4rem 0 0.75rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                  {plan.description || 'Comprehensive 1-to-1 instruction.'}
-                </p>
-                <strong style={{ fontSize: '1.25rem', color: '#fff' }}>
-                  ₹{plan.amount.toLocaleString('en-IN')}
-                  <small style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 'normal' }}>
-                    /{plan.billing_period || 'mo'}
-                  </small>
-                </strong>
-              </div>
-            );
-          })}
+      {/* Fixed Academy Enrolment (Locked To Profile Data) */}
+      <section className="student-panel" style={{ marginBottom: '1.5rem', border: '1px solid rgba(212,175,55,0.3)', background: 'linear-gradient(135deg, rgba(212,175,55,0.06) 0%, rgba(18,21,28,0.7) 100%)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+          <div>
+            <p className="student-kicker" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <Lock size={13} style={{ color: 'var(--gold)' }} /> Official Enrolment Structure
+            </p>
+            <h3 style={{ margin: 0, color: '#fff' }}>Fixed Tuition Plan &amp; Schedule</h3>
+          </div>
+          <span className="booking-badge" style={{ background: 'rgba(93,211,122,0.15)', color: '#5dd37a', border: '1px solid rgba(93,211,122,0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+            <ShieldCheck size={13} /> Fixed &amp; Verified by Academy
+          </span>
         </div>
 
-        {/* Add-ons list */}
-        {addOnsList.length > 0 && (
-          <div style={{ marginTop: '1.25rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1.25rem' }}>
-            <b style={{ color: '#fff', fontSize: '0.95rem', display: 'block', marginBottom: '0.5rem' }}>
-              Available Add-On Electives
-            </b>
-            <div style={{ display: 'grid', gap: '0.5rem' }}>
-              {addOnsList.map((addon) => {
-                const checked = selectedAddonIds.includes(addon.id);
-                return (
-                  <label
-                    key={addon.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.75rem',
-                      padding: '0.75rem 1rem',
-                      borderRadius: '8px',
-                      background: checked ? 'rgba(212,175,55,0.08)' : 'rgba(255,255,255,0.02)',
-                      border: '1px solid rgba(255,255,255,0.06)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) => {
-                        if (e.target.checked) setSelectedAddonIds([...selectedAddonIds, addon.id]);
-                        else setSelectedAddonIds(selectedAddonIds.filter((id) => id !== addon.id));
-                      }}
-                      style={{ accentColor: 'var(--gold)' }}
-                    />
-                    <div style={{ flex: 1 }}>
-                      <span style={{ color: '#fff', fontWeight: 600 }}>{addon.name}</span>
-                      <small style={{ display: 'block', color: 'var(--text-secondary)' }}>
-                        {addon.description}
-                      </small>
-                    </div>
-                    <b style={{ color: 'var(--gold)' }}>+₹{addon.amount.toLocaleString('en-IN')}/mo</b>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        <p className="student-muted" style={{ marginBottom: '1.25rem', lineHeight: 1.5 }}>
+          Your tuition fee tier and class schedule are permanently tied to your student account profile. To preserve instructor allocation and cohort fairness, tuition fees cannot be altered directly from the portal once fixed. To request a change or upgrade, submit a request to your instructor below.
+        </p>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
-          <button className="admin-save" onClick={handleApplyPlanCustomization} disabled={savingPlan} style={{ margin: 0, width: 'auto' }}>
-            {savingPlan ? 'Syncing Plan...' : 'Save Plan Selection'}
-          </button>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
+          <div style={{ padding: '1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <small style={{ color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '0.72rem', letterSpacing: '0.08em' }}>
+              Enrolled Plan
+            </small>
+            <strong style={{ display: 'block', fontSize: '1.15rem', color: '#fff', marginTop: '0.25rem' }}>
+              {dynamicFeeSummary.basePlanName}
+            </strong>
+            <span style={{ color: 'var(--gold)', fontSize: '0.85rem' }}>
+              Base: ₹{dynamicFeeSummary.baseAmount.toLocaleString('en-IN')}/mo
+            </span>
+          </div>
+
+          <div style={{ padding: '1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <small style={{ color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '0.72rem', letterSpacing: '0.08em' }}>
+              Total Monthly Tuition
+            </small>
+            <strong style={{ display: 'block', fontSize: '1.3rem', color: 'var(--gold)', marginTop: '0.25rem' }}>
+              ₹{dynamicFeeSummary.totalAmount.toLocaleString('en-IN')}/mo
+            </strong>
+            <span style={{ color: '#5dd37a', fontSize: '0.82rem' }}>
+              {dynamicFeeSummary.addonAmount > 0 ? `Includes ₹${dynamicFeeSummary.addonAmount} add-ons` : 'Standard Tuition (No add-ons)'}
+            </span>
+          </div>
+
+          <div style={{ padding: '1rem', borderRadius: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <small style={{ color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '0.72rem', letterSpacing: '0.08em' }}>
+              Weekly Session Window
+            </small>
+            <strong style={{ display: 'block', fontSize: '0.98rem', color: '#fff', marginTop: '0.25rem' }}>
+              {student?.preferred_schedule || 'Weekend Batch Window'}
+            </strong>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+              Curriculum: {student?.curriculum || 'Guitar'}
+            </span>
+          </div>
+        </div>
+
+        {/* Change Request Action Callout */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1.25rem' }}>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            Need to change your tuition tier, billing cycle, or add electives?
+          </span>
+          {onNavigateToRequests && (
+            <button
+              type="button"
+              className="student-save-btn"
+              onClick={onNavigateToRequests}
+              style={{ width: 'auto' }}
+            >
+              <Send size={15} /> Request Plan / Fee Change
+            </button>
+          )}
         </div>
       </section>
 
@@ -1864,28 +2138,25 @@ const ModulesScheduleTab = ({
                   padding: '1.25rem',
                   borderRadius: '10px',
                   background: 'rgba(255,255,255,0.03)',
-                  border: status === 'mastered' ? '1px solid rgba(93,211,122,0.3)' : '1px solid rgba(255,255,255,0.08)',
+                  border: status === 'mastered' ? '1px solid rgba(93,211,122,0.3)' : status === 'in_progress' ? '1px solid rgba(212,175,55,0.3)' : '1px solid rgba(255,255,255,0.08)',
                   display: 'grid',
                   gap: '0.75rem',
                 }}
               >
                 <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
                   <div
-                    onClick={() => onToggleProgress(m.id)}
-                    title="Click to toggle status: Not Started -> Learning -> Mastered"
                     style={{
                       width: '38px',
                       height: '38px',
                       borderRadius: '50%',
-                      background: status === 'mastered' ? 'rgba(93,211,122,0.2)' : 'rgba(212,175,55,0.15)',
-                      color: status === 'mastered' ? '#5dd37a' : 'var(--gold)',
-                      border: status === 'mastered' ? '1px solid #5dd37a' : '1px solid var(--gold)',
+                      background: status === 'mastered' ? 'rgba(93,211,122,0.2)' : status === 'in_progress' ? 'rgba(212,175,55,0.15)' : 'rgba(255,255,255,0.05)',
+                      color: status === 'mastered' ? '#5dd37a' : status === 'in_progress' ? 'var(--gold)' : 'var(--text-secondary)',
+                      border: status === 'mastered' ? '1px solid #5dd37a' : status === 'in_progress' ? '1px solid var(--gold)' : '1px solid rgba(255,255,255,0.15)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       fontWeight: 700,
                       flexShrink: 0,
-                      cursor: 'pointer',
                     }}
                   >
                     {status === 'mastered' ? <Check size={18} /> : idx + 1}
@@ -1893,19 +2164,19 @@ const ModulesScheduleTab = ({
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                       <b style={{ color: '#fff', fontSize: '1.05rem' }}>{m.title}</b>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         <span className="booking-badge" style={{ fontSize: '0.72rem', textTransform: 'capitalize' }}>
                           {m.category}
                         </span>
-                        <button
-                          onClick={() => onToggleProgress(m.id)}
+                        <span
+                          className="booking-badge"
                           style={{
                             padding: '0.25rem 0.65rem',
-                            borderRadius: '999px',
-                            border: '0',
                             fontSize: '0.75rem',
                             fontWeight: 600,
-                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
                             background:
                               status === 'mastered'
                                 ? 'rgba(93,211,122,0.2)'
@@ -1918,10 +2189,16 @@ const ModulesScheduleTab = ({
                                 : status === 'in_progress'
                                   ? 'var(--gold)'
                                   : 'var(--text-secondary)',
+                            border:
+                              status === 'mastered'
+                                ? '1px solid rgba(93,211,122,0.3)'
+                                : status === 'in_progress'
+                                  ? '1px solid rgba(212,175,55,0.3)'
+                                  : '1px solid rgba(255,255,255,0.1)',
                           }}
                         >
-                          {status === 'mastered' ? '✓ Mastered' : status === 'in_progress' ? '⏳ Learning' : '○ Not Started'}
-                        </button>
+                          {status === 'mastered' ? '✓ Mastered (Verified)' : status === 'in_progress' ? '⏳ Learning / In Progress' : '○ Upcoming Module'}
+                        </span>
                       </div>
                     </div>
                     <p style={{ margin: '0.35rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: '1.5' }}>
@@ -2261,11 +2538,11 @@ const PayTuitionModal = ({
   };
 
   return (
-    <div className="fee-login-modal-overlay">
-      <div className="fee-login-modal-card" style={{ maxWidth: '550px', textAlign: 'left' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+    <div className="tfs-modal-overlay">
+      <form onSubmit={handleSubmit} className="tfs-modal-card" style={{ maxWidth: '560px' }}>
+        <div className="tfs-modal-header">
           <div>
-            <h3 style={{ margin: 0, color: 'var(--gold)' }}>Pay Monthly Tuition Fee</h3>
+            <h3 style={{ margin: 0, color: 'var(--gold)', fontSize: '1.25rem' }}>Pay Monthly Tuition Fee</h3>
             <small style={{ color: 'var(--text-secondary)' }}>
               Plan: {dynamicFeeSummary.basePlanName} • Total: ₹{dynamicFeeSummary.totalAmount}
             </small>
@@ -2275,98 +2552,116 @@ const PayTuitionModal = ({
           </button>
         </div>
 
-        {/* Official UPI Details Box */}
-        <div style={{ background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '10px', padding: '1.15rem', marginBottom: '1.25rem' }}>
-          <p style={{ margin: '0 0 0.5rem', color: 'var(--gold)', fontWeight: 600, fontSize: '0.9rem' }}>
-            Official TFS UPI Payment Information
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <span style={{ color: '#fff', fontFamily: 'monospace', fontSize: '1.05rem', fontWeight: 600 }}>
-              {officialUpi}
-            </span>
-            <button
-              type="button"
-              onClick={handleCopyUpi}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                background: 'rgba(212,175,55,0.2)',
-                color: 'var(--gold)',
-                border: '1px solid var(--gold)',
-                borderRadius: '6px',
-                padding: '0.35rem 0.65rem',
-                cursor: 'pointer',
-                fontSize: '0.8rem',
-              }}
-            >
-              <Copy size={13} /> {copied ? 'Copied!' : 'Copy UPI ID'}
-            </button>
+        <div className="tfs-modal-body">
+          {/* Official UPI Details Box */}
+          <div style={{ background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '10px', padding: '1.15rem', marginBottom: '1.25rem' }}>
+            <p style={{ margin: '0 0 0.5rem', color: 'var(--gold)', fontWeight: 600, fontSize: '0.9rem' }}>
+              Official TFS UPI Payment Information
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <span style={{ color: '#fff', fontFamily: 'monospace', fontSize: '1.05rem', fontWeight: 600 }}>
+                {officialUpi}
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyUpi}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  background: 'rgba(212,175,55,0.2)',
+                  color: 'var(--gold)',
+                  border: '1px solid var(--gold)',
+                  borderRadius: '6px',
+                  padding: '0.35rem 0.65rem',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem',
+                }}
+              >
+                <Copy size={13} /> {copied ? 'Copied!' : 'Copy UPI ID'}
+              </button>
+            </div>
+            <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem', lineHeight: '1.4' }}>
+              Open Google Pay, PhonePe, Paytm, or BHIM. Send the exact fee amount, then copy the 12-digit UTR/UPI Transaction ID and enter it below.
+            </small>
           </div>
-          <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem', lineHeight: '1.4' }}>
-            Open Google Pay, PhonePe, Paytm, or BHIM. Send the exact fee amount, then copy the 12-digit UTR/UPI Transaction ID and enter it below.
-          </small>
+
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Payer Name (Bank / UPI account holder name) *
+              <input
+                required
+                value={payerName}
+                onChange={(e) => setPayerName(e.target.value)}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Amount to Pay (₹) * (Fixed Academy Tuition)
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <input
+                  required
+                  readOnly
+                  type="number"
+                  value={amount}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    background: 'rgba(212,175,55,0.06)',
+                    border: '1px solid var(--gold)',
+                    borderRadius: '8px',
+                    color: 'var(--gold)',
+                    fontWeight: 'bold',
+                    boxSizing: 'border-box',
+                    cursor: 'not-allowed',
+                  }}
+                />
+                <Lock size={15} style={{ position: 'absolute', right: '12px', color: 'var(--gold)' }} />
+              </div>
+              <small style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                Locked to your profile. (To request changes to tuition fee or plan, submit a request).
+              </small>
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              UTR / Transaction Reference (12 digits) *
+              <input
+                required
+                placeholder="e.g. 428192847291"
+                value={utr}
+                onChange={(e) => setUtr(e.target.value)}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px', color: '#fff', fontFamily: 'monospace' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Payment Notes / Cycle
+              <input
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. October monthly tuition"
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+          </div>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Payer Name (Bank / UPI account holder name) *
-            <input
-              required
-              value={payerName}
-              onChange={(e) => setPayerName(e.target.value)}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Amount to Pay (₹) *
-            <input
-              required
-              type="number"
-              value={amount}
-              onChange={(e) => setAmount(Number(e.target.value))}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: 'var(--gold)', fontWeight: 'bold' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            UTR / Transaction Reference (12 digits) *
-            <input
-              required
-              placeholder="e.g. 428192847291"
-              value={utr}
-              onChange={(e) => setUtr(e.target.value)}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '8px', color: '#fff', fontFamily: 'monospace' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Payment Notes / Cycle
-            <input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. October monthly tuition"
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-            <button type="button" className="admission-secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="admin-save" style={{ margin: 0 }} disabled={submitting}>
-              {submitting ? 'Submitting to Database...' : 'Submit Payment Reference'}
-            </button>
-          </div>
-        </form>
-      </div>
+        <div className="tfs-modal-footer">
+          <button type="button" className="portal-btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="student-save-btn" style={{ margin: 0, width: 'auto' }} disabled={submitting}>
+            <Check size={16} /> {submitting ? 'Submitting to Database...' : 'Submit Payment Reference'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 };
 
 // =========================================================================
-// EDIT ID CARD MODAL
+// EDIT ID CARD MODAL (With Pass Photo Upload)
 // =========================================================================
 const EditIdCardModal = ({
   student,
@@ -2380,7 +2675,24 @@ const EditIdCardModal = ({
   const [firstName, setFirstName] = useState(student.first_name || '');
   const [lastName, setLastName] = useState(student.last_name || '');
   const [phoneNumber, setPhoneNumber] = useState(student.phone_number || '');
+  const [avatarUrl, setAvatarUrl] = useState(student.avatar_url || '');
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePhotoSelect = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const bucketUrl = await uploadImageToBucket(file, 'students');
+      setAvatarUrl(bucketUrl);
+    } catch (err) {
+      console.error('Error uploading photo:', err);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -2389,61 +2701,96 @@ const EditIdCardModal = ({
       first_name: firstName.trim(),
       last_name: lastName.trim(),
       phone_number: phoneNumber.trim(),
+      avatar_url: avatarUrl,
     });
     setSubmitting(false);
   };
 
   return (
-    <div className="fee-login-modal-overlay">
-      <div className="fee-login-modal-card" style={{ maxWidth: '480px', textAlign: 'left' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-          <h3 style={{ margin: 0, color: 'var(--gold)' }}>Edit Student ID Pass</h3>
+    <div className="tfs-modal-overlay">
+      <form onSubmit={handleSubmit} className="tfs-modal-card" style={{ maxWidth: '480px' }}>
+        <div className="tfs-modal-header">
+          <h3 style={{ margin: 0, color: 'var(--gold)', fontSize: '1.25rem' }}>Edit Student ID Pass</h3>
           <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>
             <X size={20} />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '1rem' }}>
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            First Name on Card *
-            <input
-              required
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Last Name on Card *
-            <input
-              required
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-            Emergency Contact / Phone
-            <input
-              placeholder="+91 98765 43210"
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value)}
-              style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-            />
-          </label>
-
-          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-            <button type="button" className="admission-secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="admin-save" style={{ margin: 0 }} disabled={submitting}>
-              {submitting ? 'Updating...' : 'Update Pass'}
-            </button>
+        <div className="tfs-modal-body">
+          {/* Photo Upload for ID Card */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.85rem', background: 'rgba(212,175,55,0.06)', borderRadius: '10px', border: '1px solid rgba(212,175,55,0.2)', marginBottom: '1.25rem' }}>
+            <div className="portal-avatar-wrap" style={{ width: '56px', height: '56px' }}>
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="Pass Photo" className="portal-avatar-img" />
+              ) : (
+                <div className="portal-avatar-initials" style={{ width: '56px', height: '56px', fontSize: '1.4rem' }}>
+                  {(firstName || student.first_name || 'S').charAt(0).toUpperCase()}
+                </div>
+              )}
+            </div>
+            <div style={{ flex: 1 }}>
+              <b style={{ color: '#fff', fontSize: '0.9rem', display: 'block', marginBottom: '0.2rem' }}>Pass Photo</b>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handlePhotoSelect}
+                style={{ display: 'none' }}
+              />
+              <button
+                type="button"
+                className="portal-btn-secondary"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+              >
+                <Camera size={13} /> {uploading ? 'Processing...' : avatarUrl ? 'Change Pass Photo' : 'Upload Pass Photo'}
+              </button>
+            </div>
           </div>
-        </form>
-      </div>
+
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              First Name on Card *
+              <input
+                required
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Last Name on Card *
+              <input
+                required
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Emergency Contact / Phone
+              <input
+                placeholder="+91 98765 43210"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="tfs-modal-footer">
+          <button type="button" className="portal-btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="student-save-btn" style={{ margin: 0, width: 'auto' }} disabled={submitting}>
+            <Check size={16} /> {submitting ? 'Updating...' : 'Update Pass'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 };

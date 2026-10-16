@@ -14,10 +14,15 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-// Admin client: only create a separate instance if the key is a valid JWT (starts with 'eyJ')
-// Using the same client prevents "Multiple GoTrueClient instances" warnings
-const isValidJwt = supabaseSecretKey.startsWith('eyJ');
-export const supabaseAdmin = isValidJwt
+// Admin client: create a service role instance only if a valid JWT secret key is configured.
+// Real Supabase service role keys are JWTs that begin with 'eyJ'. Non-JWT keys fail with 'Unregistered API key'.
+const hasValidSecretKey = Boolean(
+  supabaseSecretKey && 
+  supabaseSecretKey !== 'placeholder' && 
+  supabaseSecretKey.startsWith('eyJ')
+);
+
+export const supabaseAdmin = hasValidSecretKey
   ? createClient(supabaseUrl, supabaseSecretKey, {
       auth: {
         storageKey: 'sb-admin-auth-token',
@@ -27,3 +32,4 @@ export const supabaseAdmin = isValidJwt
       },
     })
   : supabase;
+

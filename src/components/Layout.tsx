@@ -21,6 +21,12 @@ const Layout = () => {
     normalizedPath.startsWith('/admissionform/') ||
     normalizedPath.startsWith('/feepayment/');
 
+  const isPortalRoute =
+    normalizedPath.startsWith('/tfscontrol') ||
+    normalizedPath.startsWith('/tfs-students');
+
+  const isStandalone = isStandalonePaymentRoute || isPortalRoute;
+
   useEffect(() => {
     const wrapper = document.querySelector('.mac-window-wrapper') as HTMLElement;
     const content = document.querySelector('.mac-window-content') as HTMLElement;
@@ -118,20 +124,20 @@ const Layout = () => {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: -20 }}
               transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-              style={{ flex: 1, paddingBottom: isStandalonePaymentRoute ? 0 : '10vh', transformOrigin: 'center bottom' }}
+              style={{ flex: 1, paddingBottom: isStandalone ? 0 : '10vh', transformOrigin: 'center bottom' }}
             >
               {outlet}
             </motion.main>
 
           </AnimatePresence>
-          {!isStandalonePaymentRoute && <Footer />}
+          {!isStandalone && <Footer />}
         </div>
       </div>
       
       {/* Global Components */}
       
       {/* The bottom App Drawer */}
-      {!isStandalonePaymentRoute && <Navbar />}
+      {!isStandalone && <Navbar />}
     </div>
   );
 };

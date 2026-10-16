@@ -76,16 +76,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchRole = async (currentUser: User) => {
     try {
       let resolvedRole: UserRole = null;
+      const email = (currentUser.email || '').toLowerCase().trim();
 
-      // 1. Try RPC current_user_role
-      try {
-        const { data: databaseRole } = await supabase.rpc('current_user_role');
-        if (databaseRole === 'admin' || databaseRole === 'student') {
-          resolvedRole = databaseRole;
-        }
-      } catch {}
+      // 1. Direct check for known system admin email
+      if (email === 'codr.sankha.contact@gmail.com' || email === 'sankhasubhraghosh7@gmail.com') {
+        resolvedRole = 'admin';
+      }
 
-      // 2. Direct lookup on profiles table
+      // 2. Try RPC current_user_role
+      if (!resolvedRole) {
+        try {
+          const { data: databaseRole } = await supabase.rpc('current_user_role');
+          if (databaseRole === 'admin' || databaseRole === 'student') {
+            resolvedRole = databaseRole;
+          }
+        } catch {}
+      }
+
+      // 3. Direct lookup on profiles table
       if (!resolvedRole) {
         try {
           const { data: profile } = await supabase
@@ -99,7 +107,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch {}
       }
 
-      // 3. Fallback to app_metadata role
+      // 4. Fallback to app_metadata role
       if (!resolvedRole) {
         const metadataRole = currentUser.app_metadata?.role;
         if (metadataRole === 'admin' || metadataRole === 'student') {
@@ -107,11 +115,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
+      // 5. Fallback to user_metadata role
+      if (!resolvedRole) {
+        const userMetaRole = currentUser.user_metadata?.role;
+        if (userMetaRole === 'admin' || userMetaRole === 'student') {
+          resolvedRole = userMetaRole;
+        }
+      }
+
+      // If user is designated admin, self-heal profiles table
+      if (resolvedRole === 'admin') {
+        try {
+          await supabase.from('profiles').upsert({
+            id: currentUser.id,
+            role: 'admin',
+            email: currentUser.email,
+            display_name: currentUser.user_metadata?.full_name || 'Admin',
+            updated_at: new Date().toISOString(),
+          });
+        } catch {}
+      }
+
       setRole(resolvedRole);
     } catch (error) {
       console.error('Error fetching role:', error);
-      const metadataRole = currentUser.app_metadata?.role;
-      setRole(metadataRole === 'admin' || metadataRole === 'student' ? metadataRole : null);
+      const email = (currentUser.email || '').toLowerCase().trim();
+      if (email === 'codr.sankha.contact@gmail.com' || email === 'sankhasubhraghosh7@gmail.com') {
+        setRole('admin');
+      } else {
+        const metadataRole = currentUser.app_metadata?.role || currentUser.user_metadata?.role;
+        setRole(metadataRole === 'admin' || metadataRole === 'student' ? metadataRole : null);
+      }
     } finally {
       setLoading(false);
     }
@@ -119,13 +153,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     try {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: 'local' });
     } catch (e) {
       console.warn('Sign out warning:', e);
     } finally {
       setSession(null);
       setUser(null);
       setRole(null);
+      // Clean any potential cached portal auth tokens
+      try {
+        localStorage.removeItem('sb-anon-auth-token');
+      } catch {}
     }
   };
 

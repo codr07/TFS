@@ -10,7 +10,9 @@ const Navbar = () => {
     normalizedPath === '/admissionform' || 
     normalizedPath === '/feepayment' ||
     normalizedPath.startsWith('/admissionform/') ||
-    normalizedPath.startsWith('/feepayment/');
+    normalizedPath.startsWith('/feepayment/') ||
+    normalizedPath.startsWith('/tfscontrol') ||
+    normalizedPath.startsWith('/tfs-students');
 
   const [isMobile, setIsMobile] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);

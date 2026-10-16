@@ -1,5 +1,10 @@
 import { supabase, supabaseAdmin } from './supabase';
 
+export function isUuid(val?: string | null): boolean {
+  if (!val || typeof val !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val.trim());
+}
+
 export interface FeePlan {
   id: string;
   name: string;
@@ -256,12 +261,23 @@ export async function saveFeePlan(plan: Partial<FeePlan> & { name: string; amoun
   return fullPlan;
 }
 
-export async function deleteFeePlan(id: string): Promise<void> {
+export async function deleteFeePlan(id: string, planName?: string): Promise<void> {
   const current = getStored<FeePlan[]>('tfs_fee_plans', []);
-  setStored('tfs_fee_plans', current.filter((p) => p.id !== id));
+  const matched = current.find((p) => p.id === id);
+  const name = planName || matched?.name;
+  setStored('tfs_fee_plans', current.filter((p) => p.id !== id && (!name || p.name !== name)));
   try {
-    await supabaseAdmin.from('fee_plans').delete().eq('id', id);
-  } catch {}
+    if (isUuid(id)) {
+      const { error } = await supabaseAdmin.from('fee_plans').delete().eq('id', id);
+      if (error && name) {
+        await supabaseAdmin.from('fee_plans').delete().eq('name', name);
+      }
+    } else if (name) {
+      await supabaseAdmin.from('fee_plans').delete().eq('name', name);
+    }
+  } catch (e) {
+    console.warn('deleteFeePlan error:', e);
+  }
 }
 
 export async function loadCurriculumItems(): Promise<CurriculumItem[]> {
@@ -310,12 +326,23 @@ export async function saveCurriculumItem(item: Partial<CurriculumItem> & { title
   return fullItem;
 }
 
-export async function deleteCurriculumItem(id: string): Promise<void> {
+export async function deleteCurriculumItem(id: string, itemTitle?: string): Promise<void> {
   const current = getStored<CurriculumItem[]>('tfs_curriculum_items', []);
-  setStored('tfs_curriculum_items', current.filter((c) => c.id !== id));
+  const matched = current.find((c) => c.id === id);
+  const title = itemTitle || matched?.title;
+  setStored('tfs_curriculum_items', current.filter((c) => c.id !== id && (!title || c.title !== title)));
   try {
-    await supabaseAdmin.from('curriculum_items').delete().eq('id', id);
-  } catch {}
+    if (isUuid(id)) {
+      const { error } = await supabaseAdmin.from('curriculum_items').delete().eq('id', id);
+      if (error && title) {
+        await supabaseAdmin.from('curriculum_items').delete().eq('title', title);
+      }
+    } else if (title) {
+      await supabaseAdmin.from('curriculum_items').delete().eq('title', title);
+    }
+  } catch (e) {
+    console.warn('deleteCurriculumItem error:', e);
+  }
 }
 
 export async function loadAddOns(): Promise<AddOn[]> {
@@ -359,12 +386,23 @@ export async function saveAddOn(addon: Partial<AddOn> & { name: string; amount: 
   return fullAddon;
 }
 
-export async function deleteAddOn(id: string): Promise<void> {
+export async function deleteAddOn(id: string, addonName?: string): Promise<void> {
   const current = getStored<AddOn[]>('tfs_add_ons', []);
-  setStored('tfs_add_ons', current.filter((a) => a.id !== id));
+  const matched = current.find((a) => a.id === id);
+  const name = addonName || matched?.name;
+  setStored('tfs_add_ons', current.filter((a) => a.id !== id && (!name || a.name !== name)));
   try {
-    await supabaseAdmin.from('add_ons').delete().eq('id', id);
-  } catch {}
+    if (isUuid(id)) {
+      const { error } = await supabaseAdmin.from('add_ons').delete().eq('id', id);
+      if (error && name) {
+        await supabaseAdmin.from('add_ons').delete().eq('name', name);
+      }
+    } else if (name) {
+      await supabaseAdmin.from('add_ons').delete().eq('name', name);
+    }
+  } catch (e) {
+    console.warn('deleteAddOn error:', e);
+  }
 }
 
 export async function loadScheduleItems(): Promise<ScheduleItem[]> {
@@ -407,12 +445,106 @@ export async function saveScheduleItem(item: Partial<ScheduleItem> & { title: st
   return fullItem;
 }
 
-export async function deleteScheduleItem(id: string): Promise<void> {
+export async function deleteScheduleItem(id: string, itemTitle?: string): Promise<void> {
   const current = getStored<ScheduleItem[]>('tfs_schedule_items', []);
-  setStored('tfs_schedule_items', current.filter((s) => s.id !== id));
+  const matched = current.find((s) => s.id === id);
+  const title = itemTitle || matched?.title;
+  setStored('tfs_schedule_items', current.filter((s) => s.id !== id && (!title || s.title !== title)));
   try {
-    await supabaseAdmin.from('schedule_items').delete().eq('id', id);
-  } catch {}
+    if (isUuid(id)) {
+      const { error } = await supabaseAdmin.from('schedule_items').delete().eq('id', id);
+      if (error && title) {
+        await supabaseAdmin.from('schedule_items').delete().eq('title', title);
+      }
+    } else if (title) {
+      await supabaseAdmin.from('schedule_items').delete().eq('title', title);
+    }
+  } catch (e) {
+    console.warn('deleteScheduleItem error:', e);
+  }
+}
+
+// ----------------- DEFAULT ACTIVE STUDENTS & SEEDING -----------------
+
+export function getDefaultStudents(): StudentProfile[] {
+  return [
+    {
+      id: 'ccbc8a5d-0bfa-4573-a3be-f2d5c8fb825d',
+      first_name: 'Sankha',
+      last_name: 'Saha',
+      email: 'codr.sankha.contact@gmail.com',
+      phone_number: '+91 91234 56789',
+      curriculum: 'Guitar',
+      class_schedule: 'Home Visit — ₹1,500/month',
+      preferred_schedule: 'Weekend Flexible',
+      monthly_fee: 1500,
+      fee_status: 'Up to date',
+      fee_due_date: '1st of every month',
+      profession: 'Student',
+      address: 'Bengaluru, India',
+      status: 'active',
+      overall_progress_pct: 100,
+      instructor_feedback: 'Master level certification; classical harmony and acoustic compositions.',
+      created_at: new Date(Date.now() - 90 * 86400000).toISOString(),
+    },
+  ];
+}
+
+export async function seedStudentsToSupabase(students = getDefaultStudents()): Promise<void> {
+  for (const s of students) {
+    try {
+      // 1. Save to student_profiles
+      await supabaseAdmin.from('student_profiles').upsert({
+        id: s.id,
+        first_name: s.first_name,
+        last_name: s.last_name,
+        email: s.email,
+        phone_number: s.phone_number,
+        curriculum: s.curriculum,
+        class_schedule: s.class_schedule,
+        status: s.status,
+      }, { onConflict: 'email' });
+
+      // 2. Save to student_plans
+      await supabaseAdmin.from('student_plans').upsert({
+        student_id: s.id,
+        instrument: s.curriculum,
+        format: s.class_schedule,
+        schedule_text: s.preferred_schedule || 'Weekend Flexible',
+        status: s.status,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'student_id' });
+
+      // 3. Save to student_data (try full schema first, fallback to minimal if columns missing)
+      try {
+        await supabaseAdmin.from('student_data').upsert({
+          id: s.id,
+          user_id: s.id,
+          student_name: `${s.first_name} ${s.last_name}`.trim(),
+          email: s.email,
+          phone_number: s.phone_number,
+          instrument: s.curriculum,
+          monthly_fee: s.monthly_fee || 1500,
+          format: s.class_schedule,
+          schedule_text: s.preferred_schedule,
+          status: s.status,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'id' });
+      } catch {
+        try {
+          await supabaseAdmin.from('student_data').upsert({
+            id: s.id,
+            user_id: s.id,
+            instrument: s.curriculum,
+            monthly_fee: s.monthly_fee || 1500,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'id' });
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('seedStudentsToSupabase item notice:', e);
+    }
+  }
 }
 
 // ----------------- REAL DATABASE STUDENT SYNCHRONIZATION -----------------
@@ -438,16 +570,75 @@ export async function loadStudents(): Promise<StudentProfile[]> {
           phone_number: sp.phone_number || '',
           curriculum: sp.curriculum || 'Guitar',
           class_schedule: sp.class_schedule || 'Home Tuition — ₹1,300/month',
-          preferred_schedule: 'Saturday — 10:00 AM – 1:00 PM',
+          preferred_schedule: sp.preferred_schedule || 'Saturday — 10:00 AM – 1:00 PM',
+          monthly_fee: sp.monthly_fee !== undefined && sp.monthly_fee !== null ? Number(sp.monthly_fee) : 1300,
+          fee_status: sp.fee_status || 'Up to date',
+          fee_due_date: sp.fee_due_date || '',
+          addons: Array.isArray(sp.addons) ? sp.addons : (typeof sp.addons === 'string' ? [sp.addons] : []),
+          profession: sp.profession || '',
+          address: sp.address || '',
+          notes: sp.notes || '',
+          bio: sp.bio || '',
+          emergency_contact: sp.emergency_contact || '',
+          emergency_phone: sp.emergency_phone || '',
+          avatar_url: sp.avatar_url || '',
+          module_progress: sp.module_progress || {},
+          overall_progress_pct: sp.overall_progress_pct ?? 0,
+          instructor_feedback: sp.instructor_feedback || '',
+          milestone_badges: Array.isArray(sp.milestone_badges) ? sp.milestone_badges : [],
+          last_evaluated_at: sp.last_evaluated_at || '',
+          admission_id: sp.admission_id || '',
           status: (sp.status as any) || 'active',
-          notes: '',
           created_at: sp.created_at || new Date().toISOString(),
           updated_at: sp.updated_at,
         });
       }
     }
 
-    // 2. Fetch from profiles where role is 'student'
+    // 2. Fetch from student_plans to enrich instruments, formats, and schedules
+    try {
+      const { data: plansList } = await supabaseAdmin.from('student_plans').select('*');
+      if (plansList && plansList.length > 0) {
+        for (const plan of plansList) {
+          const student = studentMap.get(plan.student_id);
+          if (student) {
+            if (plan.instrument) student.curriculum = plan.instrument;
+            if (plan.format) student.class_schedule = plan.format;
+            if (plan.schedule_text) student.preferred_schedule = plan.schedule_text;
+            if (plan.status) student.status = plan.status as any;
+          }
+        }
+      }
+    } catch {}
+
+    // 3. Fallback to student_data / students_data if student_profiles was empty
+    if (studentMap.size === 0) {
+      try {
+        const { data: sdList } = await supabaseAdmin.from('student_data').select('*');
+        if (sdList && sdList.length > 0) {
+          for (const sd of sdList) {
+            const sid = sd.id || sd.user_id || `sd-${Date.now()}`;
+            const nameParts = (sd.student_name || 'Student').trim().split(' ');
+            studentMap.set(sid, {
+              id: sid,
+              first_name: nameParts[0] || 'Student',
+              last_name: nameParts.slice(1).join(' ') || '',
+              email: sd.email || '',
+              phone_number: sd.phone_number || '',
+              curriculum: sd.instrument || 'Guitar',
+              class_schedule: sd.format || 'Home Tuition — ₹1,300/month',
+              preferred_schedule: sd.schedule_text || 'Saturday — 10:00 AM – 1:00 PM',
+              monthly_fee: sd.monthly_fee ? Number(sd.monthly_fee) : 1300,
+              fee_status: 'Up to date',
+              status: (sd.status as any) || 'active',
+              created_at: sd.updated_at || new Date().toISOString(),
+            });
+          }
+        }
+      } catch {}
+    }
+
+    // 4. Fetch from profiles where role is 'student'
     const { data: pList, error: pErr } = await supabaseAdmin
       .from('profiles')
       .select('*')
@@ -572,11 +763,40 @@ export async function loadStudents(): Promise<StudentProfile[]> {
     console.error('Error synchronizing database students:', err);
   }
 
+  // 5. Purge any known mock student IDs from studentMap
+  const MOCK_IDS = new Set([
+    'a1111111-1111-1111-1111-111111111111',
+    'a2222222-2222-2222-2222-222222222222',
+    'a3333333-3333-3333-3333-333333333333',
+    'a4444444-4444-4444-4444-444444444444',
+    'a5555555-5555-5555-5555-555555555555',
+  ]);
+  for (const id of MOCK_IDS) {
+    studentMap.delete(id);
+  }
+
+  // 6. If all remote tables are empty, load active defaults and auto-seed Supabase
+  if (studentMap.size === 0) {
+    const cachedPre = getStored<StudentProfile[]>('tfs_students', []).filter((s) => !MOCK_IDS.has(s.id));
+    const defaults = cachedPre.length > 0 ? cachedPre : getDefaultStudents();
+    for (const d of defaults) {
+      studentMap.set(d.id, d);
+    }
+    try {
+      window.setTimeout(() => void seedStudentsToSupabase(defaults), 150);
+    } catch {}
+  }
+
   // Merge extra local metadata (like custom notes or preferred slot or progress) if present
-  const cached = getStored<StudentProfile[]>('tfs_students', []);
+  const cached = getStored<StudentProfile[]>('tfs_students', []).filter((s) => !MOCK_IDS.has(s.id));
   const cachedMap = new Map(cached.map((c) => [c.id, c]));
 
-  const result = Array.from(studentMap.values()).map((s) => {
+  let finalStudents = Array.from(studentMap.values()).filter((s) => !MOCK_IDS.has(s.id));
+  if (finalStudents.length === 0) {
+    finalStudents = cached.length > 0 ? cached : getDefaultStudents();
+  }
+
+  const result = finalStudents.map((s) => {
     const c = cachedMap.get(s.id);
     let localProg = s.module_progress;
     try {
@@ -674,35 +894,39 @@ export async function saveStudent(student: Partial<StudentProfile> & { first_nam
     authUserId = student.id || crypto.randomUUID();
   }
 
+  const existing = current.find(
+    (s) => (authUserId && s.id === authUserId) || (email && s.email.toLowerCase() === email.toLowerCase())
+  );
+
   const fullStudent: StudentProfile = {
     id: authUserId,
     first_name: firstName,
     last_name: lastName,
     email,
-    phone_number: student.phone_number || '',
-    curriculum: student.curriculum || 'Guitar',
-    class_schedule: student.class_schedule || 'Home Tuition — ₹1,300/month',
-    preferred_schedule: student.preferred_schedule || 'Saturday — 10:00 AM – 1:00 PM',
-    addons: student.addons || [],
-    monthly_fee: Number(student.monthly_fee) || 1300,
-    profession: student.profession || '',
-    address: student.address || '',
-    avatar_url: student.avatar_url || '',
-    bio: student.bio || '',
-    emergency_contact: student.emergency_contact || '',
-    emergency_phone: student.emergency_phone || '',
-    status: student.status || 'active',
-    admission_id: student.admission_id || '',
-    admission_fee_paid: student.admission_fee_paid !== false,
-    fee_status: student.fee_status || 'Up to date',
-    fee_due_date: student.fee_due_date || '',
-    notes: student.notes || '',
-    module_progress: student.module_progress || {},
-    overall_progress_pct: student.overall_progress_pct ?? 0,
-    instructor_feedback: student.instructor_feedback || '',
-    milestone_badges: student.milestone_badges || [],
-    last_evaluated_at: student.last_evaluated_at || '',
-    created_at: student.created_at || now,
+    phone_number: student.phone_number !== undefined ? student.phone_number : existing?.phone_number || '',
+    curriculum: student.curriculum || existing?.curriculum || 'Guitar',
+    class_schedule: student.class_schedule || existing?.class_schedule || 'Home Tuition — ₹1,300/month',
+    preferred_schedule: student.preferred_schedule || existing?.preferred_schedule || 'Saturday — 10:00 AM – 1:00 PM',
+    addons: student.addons !== undefined ? student.addons : existing?.addons || [],
+    monthly_fee: student.monthly_fee !== undefined ? Number(student.monthly_fee) : existing?.monthly_fee || 1300,
+    profession: student.profession !== undefined ? student.profession : existing?.profession || '',
+    address: student.address !== undefined ? student.address : existing?.address || '',
+    avatar_url: student.avatar_url !== undefined ? student.avatar_url : existing?.avatar_url || '',
+    bio: student.bio !== undefined ? student.bio : existing?.bio || '',
+    emergency_contact: student.emergency_contact !== undefined ? student.emergency_contact : existing?.emergency_contact || '',
+    emergency_phone: student.emergency_phone !== undefined ? student.emergency_phone : existing?.emergency_phone || '',
+    status: student.status || existing?.status || 'active',
+    admission_id: student.admission_id !== undefined ? student.admission_id : existing?.admission_id || '',
+    admission_fee_paid: student.admission_fee_paid !== undefined ? student.admission_fee_paid : existing?.admission_fee_paid !== false,
+    fee_status: student.fee_status || existing?.fee_status || 'Up to date',
+    fee_due_date: student.fee_due_date || existing?.fee_due_date || '',
+    notes: student.notes !== undefined ? student.notes : existing?.notes || '',
+    module_progress: student.module_progress || existing?.module_progress || {},
+    overall_progress_pct: student.overall_progress_pct !== undefined ? student.overall_progress_pct : existing?.overall_progress_pct ?? 0,
+    instructor_feedback: student.instructor_feedback !== undefined ? student.instructor_feedback : existing?.instructor_feedback || '',
+    milestone_badges: student.milestone_badges || existing?.milestone_badges || [],
+    last_evaluated_at: student.last_evaluated_at || existing?.last_evaluated_at || '',
+    created_at: student.created_at || existing?.created_at || now,
     updated_at: now,
   };
 
@@ -733,37 +957,118 @@ export async function saveStudent(student: Partial<StudentProfile> & { first_nam
     }
   }
 
-  // 2. Sync to profiles table with student role (foreign key to auth.users)
-  try {
-    const { error: pErr } = await supabaseAdmin.from('profiles').upsert({
-      id: fullStudent.id,
-      role: 'student',
-      email: fullStudent.email,
-      display_name: fullName,
-      full_name: fullName,
-      updated_at: now,
-    });
-    if (pErr) console.warn('Supabase profiles save error:', pErr.message);
-  } catch (e) {
-    console.warn('Profiles upsert exception:', e);
+  // 2. Sync to profiles table with student role (if id is valid UUID)
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fullStudent.id)) {
+    try {
+      const { error: pErr } = await supabaseAdmin.from('profiles').upsert({
+        id: fullStudent.id,
+        role: 'student',
+        email: fullStudent.email,
+        display_name: fullName,
+        full_name: fullName,
+        updated_at: now,
+      });
+      if (pErr) console.warn('Supabase profiles save error:', pErr.message);
+    } catch (e) {
+      console.warn('Profiles upsert exception:', e);
+    }
   }
 
   // 3. Sync to student_profiles table in Supabase
   try {
-    const { error: spErr } = await supabaseAdmin.from('student_profiles').upsert({
-      id: fullStudent.id,
+    const fullPayload: Record<string, any> = {
       first_name: fullStudent.first_name,
       last_name: fullStudent.last_name,
       email: fullStudent.email,
-      phone_number: fullStudent.phone_number,
-      curriculum: fullStudent.curriculum,
-      class_schedule: fullStudent.class_schedule,
-      status: fullStudent.status,
+      phone_number: fullStudent.phone_number || '',
+      curriculum: fullStudent.curriculum || 'Guitar',
+      class_schedule: fullStudent.class_schedule || 'Home Tuition — ₹1,300/month',
+      preferred_schedule: fullStudent.preferred_schedule || '',
+      monthly_fee: fullStudent.monthly_fee ?? 0,
+      fee_status: fullStudent.fee_status || 'Up to date',
+      fee_due_date: fullStudent.fee_due_date || '',
+      addons: fullStudent.addons || [],
+      profession: fullStudent.profession || '',
+      address: fullStudent.address || '',
+      notes: fullStudent.notes || '',
+      bio: fullStudent.bio || '',
+      emergency_contact: fullStudent.emergency_contact || '',
+      emergency_phone: fullStudent.emergency_phone || '',
+      avatar_url: fullStudent.avatar_url || '',
+      module_progress: fullStudent.module_progress || {},
+      overall_progress_pct: fullStudent.overall_progress_pct ?? 0,
+      instructor_feedback: fullStudent.instructor_feedback || '',
+      milestone_badges: fullStudent.milestone_badges || [],
+      last_evaluated_at: fullStudent.last_evaluated_at || null,
+      admission_id: fullStudent.admission_id || '',
+      status: fullStudent.status || 'active',
       updated_at: now,
-    });
-    if (spErr) console.warn('Supabase student_profiles save error:', spErr.message);
+    };
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fullStudent.id)) {
+      fullPayload.id = fullStudent.id;
+    }
+
+    const { error: spErr } = await supabaseAdmin.from('student_profiles').upsert(fullPayload, { onConflict: 'email' });
+    if (spErr) {
+      // Fallback in case remote schema is pending migration of newer columns
+      await supabaseAdmin.from('student_profiles').upsert({
+        first_name: fullStudent.first_name,
+        last_name: fullStudent.last_name,
+        email: fullStudent.email,
+        phone_number: fullStudent.phone_number,
+        curriculum: fullStudent.curriculum,
+        class_schedule: fullStudent.class_schedule,
+        status: fullStudent.status,
+        updated_at: now,
+        ...(fullPayload.id ? { id: fullPayload.id } : {}),
+      }, { onConflict: 'email' });
+    }
   } catch (e) {
     console.warn('Student_profiles upsert exception:', e);
+  }
+
+  // Sync to student_plans & student_data
+  if (isUuid(fullStudent.id)) {
+    try {
+      await supabaseAdmin.from('student_plans').upsert({
+        student_id: fullStudent.id,
+        instrument: fullStudent.curriculum,
+        format: fullStudent.class_schedule,
+        schedule_text: fullStudent.preferred_schedule || 'Weekend',
+        status: fullStudent.status || 'active',
+        updated_at: now,
+      }, { onConflict: 'student_id' });
+    } catch (planErr) {
+      console.warn('student_plans sync notice:', planErr);
+    }
+
+    try {
+      await supabaseAdmin.from('student_data').upsert({
+        id: fullStudent.id,
+        user_id: fullStudent.id,
+        student_name: `${fullStudent.first_name} ${fullStudent.last_name}`.trim(),
+        email: fullStudent.email,
+        phone_number: fullStudent.phone_number,
+        instrument: fullStudent.curriculum,
+        monthly_fee: fullStudent.monthly_fee || 1500,
+        format: fullStudent.class_schedule,
+        schedule_text: fullStudent.preferred_schedule,
+        status: fullStudent.status || 'active',
+        updated_at: now,
+      }, { onConflict: 'id' });
+    } catch {
+      try {
+        await supabaseAdmin.from('student_data').upsert({
+          id: fullStudent.id,
+          user_id: fullStudent.id,
+          instrument: fullStudent.curriculum,
+          monthly_fee: fullStudent.monthly_fee || 1500,
+          updated_at: now,
+        }, { onConflict: 'id' });
+      } catch (dataErr) {
+        console.warn('student_data sync notice:', dataErr);
+      }
+    }
   }
 
   // 4. Update local cache
@@ -823,7 +1128,31 @@ export async function saveStudentProgress(
     localStorage.setItem(`tfs_progress_${studentId}`, JSON.stringify(progress));
   } catch {}
 
-  // Sync to Supabase auth user_metadata
+  // 1. Direct update to student_profiles in Supabase database
+  const targetStudent = current.find((s) => s.id === studentId);
+  try {
+    const progressPayload: Record<string, any> = {
+      module_progress: progress,
+      overall_progress_pct: pct,
+      updated_at: now,
+      last_evaluated_at: now,
+    };
+    if (feedback !== undefined) progressPayload.instructor_feedback = feedback;
+    if (badges !== undefined) progressPayload.milestone_badges = badges;
+
+    let dbUpdated = false;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(studentId)) {
+      const { error: idErr } = await supabaseAdmin.from('student_profiles').update(progressPayload).eq('id', studentId);
+      if (!idErr) dbUpdated = true;
+    }
+    if (!dbUpdated && targetStudent?.email) {
+      await supabaseAdmin.from('student_profiles').update(progressPayload).eq('email', targetStudent.email);
+    }
+  } catch (dbErr) {
+    console.warn('saveStudentProgress database update warning:', dbErr);
+  }
+
+  // 2. Sync to Supabase auth user_metadata if studentId is UUID
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(studentId)) {
     try {
       const { data: uData } = await supabaseAdmin.auth.admin.getUserById(studentId);
@@ -848,48 +1177,72 @@ export async function saveStudentProgress(
 export async function deleteStudent(id: string, email?: string): Promise<{ success: boolean; error?: string }> {
   // Update local store immediately
   const current = getStored<StudentProfile[]>('tfs_students', []);
+  const matched = current.find((s) => s.id === id || (email && s.email.toLowerCase() === email.toLowerCase()));
+  const studentEmail = email || matched?.email;
+  
   setStored(
     'tfs_students',
-    current.filter((s) => s.id !== id && (!email || s.email.toLowerCase() !== email.toLowerCase()))
+    current.filter((s) => s.id !== id && (!studentEmail || s.email.toLowerCase() !== studentEmail.toLowerCase()))
   );
 
+  const validUuid = isUuid(id) ? id : null;
   let lastError: string | null = null;
 
   try {
     // 1. Delete dependent student requests
-    if (id) {
-      await supabaseAdmin.from('student_requests').delete().eq('student_id', id);
+    if (validUuid) {
+      await supabaseAdmin.from('student_requests').delete().eq('student_id', validUuid);
     }
-    if (email) {
-      await supabaseAdmin.from('student_requests').delete().eq('student_email', email);
+    if (studentEmail) {
+      await supabaseAdmin.from('student_requests').delete().eq('student_email', studentEmail);
     }
 
-    // 2. Delete from student_profiles (first by id, and also by email if provided)
-    if (id) {
-      const { error: spErr } = await supabaseAdmin.from('student_profiles').delete().eq('id', id);
-      if (spErr && email) {
-        await supabaseAdmin.from('student_profiles').delete().eq('email', email);
+    // 2. Delete dependent fee payments
+    if (validUuid) {
+      await supabaseAdmin.from('fee_payments').delete().eq('student_id', validUuid);
+    }
+    if (studentEmail) {
+      await supabaseAdmin.from('fee_payments').delete().eq('student_email', studentEmail);
+    }
+
+    // 3. Delete dependent class updates & student plans
+    if (validUuid) {
+      try { await supabaseAdmin.from('class_updates').delete().eq('student_id', validUuid); } catch {}
+      try { await supabaseAdmin.from('student_plans').delete().eq('student_id', validUuid); } catch {}
+      try { await supabaseAdmin.from('student_data').delete().eq('id', validUuid); } catch {}
+      try { await supabaseAdmin.from('student_data').delete().eq('user_id', validUuid); } catch {}
+      try { await supabaseAdmin.from('payments').delete().eq('user_id', validUuid); } catch {}
+    }
+    if (studentEmail) {
+      try { await supabaseAdmin.from('student_data').delete().eq('email', studentEmail); } catch {}
+    }
+
+    // 4. Delete from student_profiles
+    if (validUuid) {
+      const { error: spErr } = await supabaseAdmin.from('student_profiles').delete().eq('id', validUuid);
+      if (spErr && studentEmail) {
+        await supabaseAdmin.from('student_profiles').delete().eq('email', studentEmail);
       }
-    } else if (email) {
-      await supabaseAdmin.from('student_profiles').delete().eq('email', email);
+    } else if (studentEmail) {
+      await supabaseAdmin.from('student_profiles').delete().eq('email', studentEmail);
     }
 
-    // 3. Delete from profiles (first by id, and also by email if provided)
-    if (id) {
-      const { error: pErr } = await supabaseAdmin.from('profiles').delete().eq('id', id);
-      if (pErr && email) {
-        await supabaseAdmin.from('profiles').delete().eq('email', email);
+    // 5. Delete from profiles
+    if (validUuid) {
+      const { error: pErr } = await supabaseAdmin.from('profiles').delete().eq('id', validUuid);
+      if (pErr && studentEmail) {
+        await supabaseAdmin.from('profiles').delete().eq('email', studentEmail);
       }
-    } else if (email) {
-      await supabaseAdmin.from('profiles').delete().eq('email', email);
+    } else if (studentEmail) {
+      await supabaseAdmin.from('profiles').delete().eq('email', studentEmail);
     }
 
-    // 4. Find auth user and delete from auth.users
-    let targetAuthId = id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : '';
-    if (!targetAuthId && email) {
+    // 6. Find auth user and delete from auth.users
+    let targetAuthId = validUuid || '';
+    if (!targetAuthId && studentEmail) {
       try {
         const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
-        const found = usersData?.users?.find((u: any) => u.email?.toLowerCase() === email.toLowerCase());
+        const found = usersData?.users?.find((u: any) => u.email?.toLowerCase() === studentEmail.toLowerCase());
         if (found) {
           targetAuthId = found.id;
         }
@@ -1042,6 +1395,39 @@ export function loadStoredFeePayments(): FeePaymentRecord[] {
   return getStored<FeePaymentRecord[]>('tfs_fee_payments', []);
 }
 
+export async function fetchFeePayments(): Promise<FeePaymentRecord[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('fee_payments')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!error && data && data.length > 0) {
+      const mapped: FeePaymentRecord[] = data.map((d: any) => ({
+        id: d.id,
+        timestamp: d.created_at,
+        payment_reference: d.payment_reference,
+        payment_status: d.payment_status,
+        utr: d.utr,
+        payer_name: d.payer_name,
+        student_name: d.student_name,
+        student_email: d.student_email,
+        phone: d.phone || '',
+        curriculum: d.curriculum || 'Guitar',
+        class_type: d.class_type || 'Home Visit',
+        addons: d.addons || 'None',
+        amount: Number(d.amount || 0),
+        notes: d.notes || '',
+        verified_at: d.verified_at || undefined,
+      }));
+      setStored('tfs_fee_payments', mapped);
+      return mapped;
+    }
+  } catch (err) {
+    console.warn('Could not fetch fee_payments from Supabase:', err);
+  }
+  return loadStoredFeePayments();
+}
+
 export async function saveFeePaymentRecord(record: FeePaymentRecord): Promise<void> {
   const current = loadStoredFeePayments();
   const existing = current.findIndex((p) => p.payment_reference === record.payment_reference);
@@ -1050,6 +1436,29 @@ export async function saveFeePaymentRecord(record: FeePaymentRecord): Promise<vo
     : [record, ...current];
   setStored('tfs_fee_payments', updated);
 
+  // 1. Sync to Supabase fee_payments table
+  try {
+    await supabase.from('fee_payments').upsert({
+      payment_reference: record.payment_reference,
+      payment_status: record.payment_status,
+      utr: record.utr,
+      payer_name: record.payer_name,
+      student_name: record.student_name,
+      student_email: record.student_email,
+      phone: record.phone || '',
+      curriculum: record.curriculum || 'Guitar',
+      class_type: record.class_type || 'Home Visit',
+      addons: record.addons || 'None',
+      amount: record.amount,
+      notes: record.notes || '',
+      verified_at: record.verified_at || null,
+      created_at: record.timestamp || new Date().toISOString(),
+    }, { onConflict: 'payment_reference' });
+  } catch (supaErr) {
+    console.warn('Could not sync fee payment to Supabase fee_payments:', supaErr);
+  }
+
+  // 2. Forward to Google Apps Script spreadsheet
   const apiUrl = getAdmissionApiUrl();
   if (apiUrl) {
     try {
@@ -1083,12 +1492,21 @@ export async function saveFeePaymentRecord(record: FeePaymentRecord): Promise<vo
   }
 }
 
-export function deleteFeePaymentRecord(id: string): void {
+export async function deleteFeePaymentRecord(id: string): Promise<void> {
   const current = loadStoredFeePayments();
   setStored(
     'tfs_fee_payments',
     current.filter((p) => p.id !== id && p.payment_reference !== id)
   );
+  try {
+    if (isUuid(id)) {
+      await supabaseAdmin.from('fee_payments').delete().or(`id.eq.${id},payment_reference.eq.${id}`);
+    } else {
+      await supabaseAdmin.from('fee_payments').delete().eq('payment_reference', id);
+    }
+  } catch (e) {
+    console.warn('deleteFeePaymentRecord error:', e);
+  }
 }
 
 export async function updateFeePaymentStatus(
@@ -1110,13 +1528,29 @@ export async function updateFeePaymentStatus(
   });
   setStored('tfs_fee_payments', updated);
 
-  // If verified, automatically update student fee status in the database
   const matched = current.find((p) => p.id === paymentId || p.payment_reference === paymentId);
+
+  // 1. Sync status to Supabase fee_payments table
+  try {
+    await supabaseAdmin
+      .from('fee_payments')
+      .update({
+        payment_status: newStatus,
+        notes: notes || matched?.notes || '',
+        verified_at: newStatus === 'VERIFIED' ? new Date().toISOString() : (matched?.verified_at || null),
+      })
+      .eq('payment_reference', matched?.payment_reference || paymentId);
+  } catch (err) {
+    console.warn('Could not update fee_payments in Supabase:', err);
+  }
+
+  // 2. If verified, automatically update student fee status in database
   if (matched && matched.student_email && newStatus === 'VERIFIED') {
     try {
       await supabaseAdmin
         .from('student_profiles')
         .update({
+          fee_status: 'Up to date',
           status: 'active',
           updated_at: new Date().toISOString(),
         })
@@ -1218,20 +1652,42 @@ export async function updateStudentSelfProfile(
       phone_number: updatedStudent.phone_number || '',
       curriculum: updatedStudent.curriculum || 'Guitar',
       class_schedule: updatedStudent.class_schedule || 'Home Tuition — ₹1,300/month',
+      avatar_url: updatedStudent.avatar_url || '',
+      bio: updatedStudent.bio || '',
+      emergency_contact: updatedStudent.emergency_contact || '',
+      emergency_phone: updatedStudent.emergency_phone || '',
+      profession: updatedStudent.profession || '',
+      address: updatedStudent.address || '',
       updated_at: new Date().toISOString(),
     };
     if (updatedStudent.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(updatedStudent.id)) {
       payload.id = updatedStudent.id;
     }
 
+    // Attempt update by email
     const { error: spErr } = await supabase
       .from('student_profiles')
       .update(payload)
       .eq('email', email);
 
     if (spErr) {
-      // Try with supabaseAdmin
-      await supabaseAdmin.from('student_profiles').upsert(payload);
+      const { error: upsertErr } = await supabaseAdmin
+        .from('student_profiles')
+        .upsert(payload, { onConflict: 'email' });
+      if (upsertErr) {
+        // Fallback with base columns if schema migration is pending
+        await supabaseAdmin.from('student_profiles').upsert({
+          first_name: payload.first_name,
+          last_name: payload.last_name,
+          email: payload.email,
+          phone_number: payload.phone_number,
+          curriculum: payload.curriculum,
+          class_schedule: payload.class_schedule,
+          status: 'active',
+          updated_at: payload.updated_at,
+          ...(payload.id ? { id: payload.id } : {}),
+        }, { onConflict: 'email' });
+      }
     }
 
     const fullName = `${updatedStudent.first_name} ${updatedStudent.last_name}`.trim();
@@ -1241,6 +1697,22 @@ export async function updateStudentSelfProfile(
         full_name: fullName,
         updated_at: new Date().toISOString(),
       }).eq('email', email);
+
+      // Sync active auth session metadata
+      try {
+        await supabase.auth.updateUser({
+          data: {
+            full_name: fullName,
+            avatar_url: updatedStudent.avatar_url,
+            bio: updatedStudent.bio,
+            phone: updatedStudent.phone_number,
+            emergency_contact: updatedStudent.emergency_contact,
+            emergency_phone: updatedStudent.emergency_phone,
+            profession: updatedStudent.profession,
+            address: updatedStudent.address,
+          },
+        });
+      } catch {}
     }
   } catch (err) {
     console.warn('Student self-update database warning:', err);
@@ -1256,6 +1728,102 @@ export async function updateStudentSelfProfile(
   setStored('tfs_students', updatedList);
 
   return updatedStudent;
+}
+
+// ----------------- IMAGE OPTIMIZER HELPER -----------------
+
+export function optimizeImageFile(file: File, maxDim = 320, quality = 0.82): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          }
+        } else {
+          if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(e.target?.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Uploads an image to the Supabase Storage 'avatars' bucket.
+ * 1. Optimizes the image client-side to ensure zero-lag fast transfer (<100ms standard).
+ * 2. Uploads the image binary to the Supabase Storage bucket.
+ * 3. Returns the publicly accessible URL.
+ * 4. Gracefully degrades to the optimized Base64 data URL if the bucket is unreachable.
+ */
+export async function uploadImageToBucket(
+  file: File,
+  folder = 'profiles',
+  maxDim = 400,
+  quality = 0.85
+): Promise<string> {
+  let optimizedDataUrl: string;
+  try {
+    optimizedDataUrl = await optimizeImageFile(file, maxDim, quality);
+  } catch {
+    optimizedDataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  try {
+    const res = await fetch(optimizedDataUrl);
+    const blob = await res.blob();
+
+    const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+    const cleanExt = ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(fileExt) ? fileExt : 'jpg';
+    const fileName = `${folder}/${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${cleanExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('avatars')
+      .upload(fileName, blob, {
+        contentType: `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`,
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.warn('Supabase storage upload notice:', uploadError.message);
+      return optimizedDataUrl;
+    }
+
+    const { data: publicData } = supabase.storage.from('avatars').getPublicUrl(fileName);
+    if (publicData?.publicUrl) {
+      return publicData.publicUrl;
+    }
+  } catch (err) {
+    console.warn('Storage bucket upload fallback:', err);
+  }
+
+  return optimizedDataUrl;
 }
 
 // ----------------- CSV SPREADSHEET EXPORTERS -----------------

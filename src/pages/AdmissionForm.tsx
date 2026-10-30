@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { jsPDF } from 'jspdf';
 import { saveAdmissionLocally, submitAdmissionToSpreadsheet } from '../lib/tfsData';
 
@@ -63,8 +63,26 @@ const CLASS_FEES = {
 } as const;
 
 const AdmissionForm = () => {
+  const location = useLocation();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<AdmissionData>(initialData);
+
+  // Pick up preselected curriculum and add-ons from advertisement popup
+  useEffect(() => {
+    const state = location.state as { preselectedCurriculum?: string; preselectedAddon?: string } | undefined;
+    if (state?.preselectedCurriculum) {
+      setData((prev) => {
+        const nextAddons = state.preselectedAddon && !prev.addons.includes(state.preselectedAddon)
+          ? [...prev.addons, state.preselectedAddon]
+          : prev.addons;
+        return {
+          ...prev,
+          curriculum: state.preselectedCurriculum || prev.curriculum,
+          addons: nextAddons,
+        };
+      });
+    }
+  }, [location.state]);
   const [paymentStartedAt, setPaymentStartedAt] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [declarationAccepted, setDeclarationAccepted] = useState(false);

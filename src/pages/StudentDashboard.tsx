@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ChangeEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabaseAdmin } from '../lib/supabase';
 import {
@@ -68,6 +69,7 @@ interface AiMessage {
 
 export const StudentDashboard = () => {
   const { user, signOut } = useAuth();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<StudentTab>('home');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notice, setNotice] = useState('');
@@ -139,17 +141,24 @@ export const StudentDashboard = () => {
       const defaultSchedule = loadedSchedules.find((s) => s.active !== false);
       const defaultScheduleSlot = defaultSchedule ? `${defaultSchedule.day_label} — ${defaultSchedule.time_label}` : 'Friday — 8:00 PM – 11:00 PM';
 
-      // 2. Match student from the centralized students catalog (controlled by admin)
+      // 2. Match student from the centralized students catalog (loaded from students_data / student_profiles / student_data)
       const matchedAdminStudent = loadedStudentsList.find(
         (s) => s.id === user.id || (s.email && s.email.toLowerCase() === email.toLowerCase())
       );
 
-      // 3. Fetch from student_profiles by email or ID
-      const { data: spData } = await supabaseAdmin
-        .from('student_profiles')
-        .select('*')
-        .or(`email.eq.${email},id.eq.${user.id}`)
-        .maybeSingle();
+      // 3. Fetch from students_data & student_profiles by email or ID
+      const [{ data: stdData }, { data: spData }] = await Promise.all([
+        supabaseAdmin
+          .from('students_data')
+          .select('*')
+          .or(`email.eq.${email},id.eq.${user.id}`)
+          .maybeSingle(),
+        supabaseAdmin
+          .from('student_profiles')
+          .select('*')
+          .or(`email.eq.${email},id.eq.${user.id}`)
+          .maybeSingle(),
+      ]);
 
       // 4. Fetch from profiles by ID
       const { data: pData } = await supabaseAdmin
@@ -160,46 +169,50 @@ export const StudentDashboard = () => {
 
       let loadedProfile: StudentProfile;
 
-      if (spData) {
+      // Start with students_data or student_profiles or matchedAdminStudent
+      const baseSource = stdData || spData;
+
+      if (baseSource || matchedAdminStudent) {
         // Find matching fee plan amount
+        const planText = stdData?.class_schedule || spData?.class_schedule || matchedAdminStudent?.class_schedule;
         let matchedFee = defaultPlan?.amount || 1500;
-        if (spData.class_schedule) {
+        if (planText) {
           const matched = loadedPlans.find((p) =>
-            spData.class_schedule.toLowerCase().includes(p.name.toLowerCase()) ||
-            p.name.toLowerCase().includes(spData.class_schedule.toLowerCase())
+            planText.toLowerCase().includes(p.name.toLowerCase()) ||
+            p.name.toLowerCase().includes(planText.toLowerCase())
           );
           if (matched) matchedFee = matched.amount;
         }
 
         loadedProfile = {
-          id: spData.id,
-          first_name: spData.first_name || '',
-          last_name: spData.last_name || '',
-          email: spData.email || email,
-          phone_number: spData.phone_number || '',
-          curriculum: spData.curriculum || 'Guitar',
-          class_schedule: spData.class_schedule || defaultPlanName,
-          preferred_schedule: spData.preferred_schedule || defaultScheduleSlot,
-          status: (spData.status as any) || 'active',
-          created_at: spData.created_at || user.created_at || new Date().toISOString(),
-          updated_at: spData.updated_at,
-          monthly_fee: spData.monthly_fee !== undefined && spData.monthly_fee !== null ? Number(spData.monthly_fee) : matchedFee,
-          fee_status: spData.fee_status || 'Up to date',
-          fee_due_date: spData.fee_due_date || '',
-          addons: Array.isArray(spData.addons) ? spData.addons : (typeof spData.addons === 'string' ? [spData.addons] : []),
-          profession: spData.profession || '',
-          address: spData.address || '',
-          bio: spData.bio || '',
-          notes: spData.notes || '',
-          emergency_contact: spData.emergency_contact || '',
-          emergency_phone: spData.emergency_phone || '',
-          avatar_url: spData.avatar_url || '',
-          module_progress: spData.module_progress || {},
-          overall_progress_pct: spData.overall_progress_pct ?? 0,
-          instructor_feedback: spData.instructor_feedback || '',
-          milestone_badges: Array.isArray(spData.milestone_badges) ? spData.milestone_badges : [],
-          last_evaluated_at: spData.last_evaluated_at || '',
-          admission_id: spData.admission_id || '',
+          id: stdData?.id || spData?.id || matchedAdminStudent?.id || user.id,
+          first_name: stdData?.first_name || spData?.first_name || matchedAdminStudent?.first_name || 'Student',
+          last_name: stdData?.last_name !== undefined ? stdData.last_name : (spData?.last_name !== undefined ? spData.last_name : (matchedAdminStudent?.last_name || '')),
+          email: stdData?.email || spData?.email || matchedAdminStudent?.email || email,
+          phone_number: stdData?.phone_number || spData?.phone_number || matchedAdminStudent?.phone_number || '',
+          curriculum: stdData?.curriculum || spData?.curriculum || matchedAdminStudent?.curriculum || 'Guitar',
+          class_schedule: stdData?.class_schedule || spData?.class_schedule || matchedAdminStudent?.class_schedule || defaultPlanName,
+          preferred_schedule: stdData?.preferred_schedule || spData?.preferred_schedule || matchedAdminStudent?.preferred_schedule || defaultScheduleSlot,
+          status: (stdData?.status || spData?.status || matchedAdminStudent?.status || 'active') as any,
+          created_at: stdData?.created_at || spData?.created_at || matchedAdminStudent?.created_at || user.created_at || new Date().toISOString(),
+          updated_at: stdData?.updated_at || spData?.updated_at || matchedAdminStudent?.updated_at,
+          monthly_fee: stdData?.monthly_fee !== undefined && stdData.monthly_fee !== null ? Number(stdData.monthly_fee) : (spData?.monthly_fee !== undefined && spData.monthly_fee !== null ? Number(spData.monthly_fee) : (matchedAdminStudent?.monthly_fee ?? matchedFee)),
+          fee_status: stdData?.fee_status || spData?.fee_status || matchedAdminStudent?.fee_status || 'Up to date',
+          fee_due_date: stdData?.fee_due_date || spData?.fee_due_date || matchedAdminStudent?.fee_due_date || '',
+          addons: Array.isArray(spData?.addons) ? spData.addons : (Array.isArray(matchedAdminStudent?.addons) ? matchedAdminStudent.addons : []),
+          profession: spData?.profession || matchedAdminStudent?.profession || '',
+          address: spData?.address || matchedAdminStudent?.address || '',
+          bio: spData?.bio || matchedAdminStudent?.bio || '',
+          notes: spData?.notes || matchedAdminStudent?.notes || '',
+          emergency_contact: spData?.emergency_contact || matchedAdminStudent?.emergency_contact || '',
+          emergency_phone: spData?.emergency_phone || matchedAdminStudent?.emergency_phone || '',
+          avatar_url: stdData?.avatar_url || spData?.avatar_url || matchedAdminStudent?.avatar_url || '',
+          module_progress: spData?.module_progress || matchedAdminStudent?.module_progress || {},
+          overall_progress_pct: spData?.overall_progress_pct !== undefined ? spData.overall_progress_pct : (matchedAdminStudent?.overall_progress_pct ?? 0),
+          instructor_feedback: spData?.instructor_feedback || matchedAdminStudent?.instructor_feedback || '',
+          milestone_badges: Array.isArray(spData?.milestone_badges) ? spData.milestone_badges : (matchedAdminStudent?.milestone_badges || []),
+          last_evaluated_at: spData?.last_evaluated_at || matchedAdminStudent?.last_evaluated_at || '',
+          admission_id: spData?.admission_id || matchedAdminStudent?.admission_id || '',
         };
       } else {
         // Build from auth user & profiles
@@ -221,8 +234,17 @@ export const StudentDashboard = () => {
           addons: [],
         };
 
-        // Create in student_profiles
+        // Create in both students_data and student_profiles
         try {
+          await supabaseAdmin.from('students_data').upsert({
+            id: user.id,
+            first_name: newRecord.first_name,
+            last_name: newRecord.last_name,
+            email: newRecord.email,
+            curriculum: newRecord.curriculum,
+            class_schedule: newRecord.class_schedule,
+            status: 'active',
+          }, { onConflict: 'email' });
           await supabaseAdmin.from('student_profiles').upsert({
             id: user.id,
             first_name: newRecord.first_name,
@@ -231,7 +253,7 @@ export const StudentDashboard = () => {
             curriculum: newRecord.curriculum,
             class_schedule: newRecord.class_schedule,
             status: 'active',
-          });
+          }, { onConflict: 'email' });
         } catch {}
 
         loadedProfile = newRecord;
@@ -242,29 +264,34 @@ export const StudentDashboard = () => {
         loadedProfile = {
           ...loadedProfile,
           ...matchedAdminStudent,
-          first_name: spData?.first_name || matchedAdminStudent.first_name || loadedProfile.first_name,
-          last_name: spData?.last_name || matchedAdminStudent.last_name || loadedProfile.last_name,
-          avatar_url: spData?.avatar_url || matchedAdminStudent.avatar_url || (user.user_metadata?.avatar_url as string) || '',
-          monthly_fee: spData?.monthly_fee !== undefined && spData.monthly_fee !== null ? Number(spData.monthly_fee) : (matchedAdminStudent.monthly_fee ?? loadedProfile.monthly_fee),
-          fee_status: spData?.fee_status || matchedAdminStudent.fee_status || loadedProfile.fee_status,
-          fee_due_date: spData?.fee_due_date || matchedAdminStudent.fee_due_date || loadedProfile.fee_due_date,
-          class_schedule: spData?.class_schedule || matchedAdminStudent.class_schedule || loadedProfile.class_schedule,
-          curriculum: spData?.curriculum || matchedAdminStudent.curriculum || loadedProfile.curriculum,
-          preferred_schedule: spData?.preferred_schedule || matchedAdminStudent.preferred_schedule || loadedProfile.preferred_schedule,
-          addons: (spData?.addons && spData.addons.length > 0) ? spData.addons : (matchedAdminStudent.addons || loadedProfile.addons || []),
-          module_progress: (spData?.module_progress && Object.keys(spData.module_progress).length > 0)
-            ? spData.module_progress
-            : (matchedAdminStudent.module_progress || {}),
-          overall_progress_pct: spData?.overall_progress_pct !== undefined
-            ? spData.overall_progress_pct
-            : (matchedAdminStudent.overall_progress_pct ?? 0),
-          instructor_feedback: spData?.instructor_feedback || matchedAdminStudent.instructor_feedback || '',
-          milestone_badges: (spData?.milestone_badges && spData.milestone_badges.length > 0)
-            ? spData.milestone_badges
-            : (matchedAdminStudent.milestone_badges || []),
-          bio: spData?.bio || matchedAdminStudent.bio || (user.user_metadata?.bio as string) || '',
-          emergency_contact: spData?.emergency_contact || matchedAdminStudent.emergency_contact || (user.user_metadata?.emergency_contact as string) || '',
-          emergency_phone: spData?.emergency_phone || matchedAdminStudent.emergency_phone || (user.user_metadata?.emergency_phone as string) || '',
+          first_name: matchedAdminStudent.first_name || loadedProfile.first_name,
+          last_name: matchedAdminStudent.last_name !== undefined ? matchedAdminStudent.last_name : loadedProfile.last_name,
+          avatar_url: matchedAdminStudent.avatar_url || loadedProfile.avatar_url || (user.user_metadata?.avatar_url as string) || '',
+          monthly_fee: matchedAdminStudent.monthly_fee !== undefined && matchedAdminStudent.monthly_fee !== null ? Number(matchedAdminStudent.monthly_fee) : loadedProfile.monthly_fee,
+          fee_status: matchedAdminStudent.fee_status || loadedProfile.fee_status,
+          fee_due_date: matchedAdminStudent.fee_due_date || loadedProfile.fee_due_date,
+          class_schedule: matchedAdminStudent.class_schedule || loadedProfile.class_schedule,
+          curriculum: matchedAdminStudent.curriculum || loadedProfile.curriculum,
+          preferred_schedule: matchedAdminStudent.preferred_schedule || loadedProfile.preferred_schedule,
+          addons: (matchedAdminStudent.addons && matchedAdminStudent.addons.length > 0) ? matchedAdminStudent.addons : (loadedProfile.addons || []),
+          status: matchedAdminStudent.status || loadedProfile.status || 'active',
+          profession: matchedAdminStudent.profession !== undefined && matchedAdminStudent.profession !== '' ? matchedAdminStudent.profession : (loadedProfile.profession || ''),
+          address: matchedAdminStudent.address !== undefined && matchedAdminStudent.address !== '' ? matchedAdminStudent.address : (loadedProfile.address || ''),
+          notes: matchedAdminStudent.notes !== undefined && matchedAdminStudent.notes !== '' ? matchedAdminStudent.notes : (loadedProfile.notes || ''),
+          admission_id: matchedAdminStudent.admission_id || loadedProfile.admission_id || '',
+          module_progress: (matchedAdminStudent.module_progress && Object.keys(matchedAdminStudent.module_progress).length > 0)
+            ? matchedAdminStudent.module_progress
+            : (loadedProfile.module_progress || {}),
+          overall_progress_pct: matchedAdminStudent.overall_progress_pct !== undefined
+            ? matchedAdminStudent.overall_progress_pct
+            : (loadedProfile.overall_progress_pct ?? 0),
+          instructor_feedback: matchedAdminStudent.instructor_feedback !== undefined && matchedAdminStudent.instructor_feedback !== '' ? matchedAdminStudent.instructor_feedback : (loadedProfile.instructor_feedback || ''),
+          milestone_badges: (matchedAdminStudent.milestone_badges && matchedAdminStudent.milestone_badges.length > 0)
+            ? matchedAdminStudent.milestone_badges
+            : (loadedProfile.milestone_badges || []),
+          bio: matchedAdminStudent.bio || loadedProfile.bio || (user.user_metadata?.bio as string) || '',
+          emergency_contact: matchedAdminStudent.emergency_contact || loadedProfile.emergency_contact || (user.user_metadata?.emergency_contact as string) || '',
+          emergency_phone: matchedAdminStudent.emergency_phone || loadedProfile.emergency_phone || (user.user_metadata?.emergency_phone as string) || '',
         };
       } else if (user.user_metadata?.avatar_url && !loadedProfile.avatar_url) {
         loadedProfile.avatar_url = user.user_metadata.avatar_url as string;
@@ -625,7 +652,7 @@ export const StudentDashboard = () => {
             upcomingLesson={upcomingLesson}
             moduleProgress={moduleProgress}
             onNavigate={setTab}
-            onOpenPayModal={() => setShowPayModal(true)}
+            onOpenPayModal={() => navigate('/feepayment', { state: { student } })}
           />
         )}
 
@@ -670,7 +697,7 @@ export const StudentDashboard = () => {
             addOnsList={addOnsList}
             discountsList={discountsList}
             payments={myPayments}
-            onOpenPayModal={() => setShowPayModal(true)}
+            onOpenPayModal={() => navigate('/feepayment', { state: { student } })}
             onNavigateToRequests={() => setTab('requests')}
           />
         )}
@@ -1464,6 +1491,23 @@ const ProfileEditTab = ({
   const [emergencyPhone, setEmergencyPhone] = useState(student.emergency_phone || '');
   const [avatarUrl, setAvatarUrl] = useState(student.avatar_url || '');
 
+  // Keep form state in sync whenever student prop updates (e.g. via admin changes or real-time sync)
+  useEffect(() => {
+    setFirstName(student.first_name || '');
+    setLastName(student.last_name || '');
+    setPhoneNumber(student.phone_number || '');
+    setProfession(student.profession || '');
+    setAddress(student.address || '');
+    setBio(student.bio || '');
+    setEmergencyContact(student.emergency_contact || '');
+    setEmergencyPhone(student.emergency_phone || '');
+    setAvatarUrl(student.avatar_url || '');
+    setCurriculum(student.curriculum || 'Guitar');
+    if (student.preferred_schedule) {
+      setPreferredSchedule(student.preferred_schedule);
+    }
+  }, [student]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
@@ -1493,6 +1537,8 @@ const ProfileEditTab = ({
     try {
       const bucketUrl = await uploadImageToBucket(file, 'students');
       setAvatarUrl(bucketUrl);
+      // Auto-save photo immediately into database so changes are never lost
+      await onSaveProfile({ avatar_url: bucketUrl });
     } catch (err) {
       console.error('Error uploading photo:', err);
     } finally {
@@ -1691,24 +1737,47 @@ const ProfileEditTab = ({
             </small>
           </div>
 
-          {/* Dynamic Batch Schedule Window Selection */}
-          <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--gold)', fontWeight: 600 }}>
-            Preferred Batch Schedule Window (Database Synced) *
-            <select
-              value={preferredSchedule}
-              onChange={(e) => setPreferredSchedule(e.target.value)}
-              style={{ padding: '0.85rem', background: '#111', border: '1px solid var(--gold)', borderRadius: '8px', color: '#fff', font: 'inherit' }}
+          {/* LOCKED BATCH SCHEDULE WINDOW (Per Requirement: Controlled only by Admin; student can request change) */}
+          <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.4rem', fontSize: '0.85rem' }}>
+            <span style={{ color: 'var(--gold)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <Lock size={14} /> Preferred Batch Schedule Window (Admin Controlled)
+            </span>
+            <div
+              style={{
+                padding: '0.85rem 1rem',
+                background: 'rgba(212,175,55,0.06)',
+                border: '1px solid rgba(212,175,55,0.25)',
+                borderRadius: '8px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '0.75rem',
+                flexWrap: 'wrap',
+              }}
             >
-              {scheduleList.map((s) => {
-                const label = `${s.day_label} — ${s.time_label}${s.description ? ` (${s.description})` : ''}`;
-                return (
-                  <option key={s.id} value={`${s.day_label} — ${s.time_label}`}>
-                    {label}
-                  </option>
-                );
-              })}
-            </select>
-          </label>
+              <div>
+                <b style={{ color: '#fff', fontSize: '0.92rem', display: 'block' }}>
+                  {preferredSchedule || 'Sunday — 10:00 AM – 1:00 PM'}
+                </b>
+                <small style={{ color: '#5dd37a', fontSize: '0.75rem' }}>
+                  Admin-assigned lesson timing &amp; next class slot
+                </small>
+              </div>
+              {onNavigateToRequests && (
+                <button
+                  type="button"
+                  className="student-text-button"
+                  onClick={onNavigateToRequests}
+                  style={{ fontSize: '0.78rem', color: 'var(--gold)', textDecoration: 'underline', padding: 0 }}
+                >
+                  Request Schedule Change →
+                </button>
+              )}
+            </div>
+            <small style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+              Batch schedule windows are fixed by the academy instructor. To request a reschedule or makeup session, tap Request Schedule Change.
+            </small>
+          </div>
 
           <label style={{ display: 'grid', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             Profession / Student Status
@@ -2721,6 +2790,13 @@ const EditIdCardModal = ({
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    setFirstName(student.first_name || '');
+    setLastName(student.last_name || '');
+    setPhoneNumber(student.phone_number || '');
+    setAvatarUrl(student.avatar_url || '');
+  }, [student]);
+
   const handlePhotoSelect = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2728,6 +2804,8 @@ const EditIdCardModal = ({
     try {
       const bucketUrl = await uploadImageToBucket(file, 'students');
       setAvatarUrl(bucketUrl);
+      // Auto-save photo immediately
+      await onSave({ avatar_url: bucketUrl });
     } catch (err) {
       console.error('Error uploading photo:', err);
     } finally {

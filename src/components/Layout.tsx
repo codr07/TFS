@@ -1,3 +1,4 @@
+import AdmissionPopupAd from './AdmissionPopupAd';
 import { useEffect } from 'react';
 import { useLocation, useOutlet } from 'react-router-dom';
 import Navbar from './Navbar';
@@ -135,6 +136,7 @@ const Layout = () => {
       </div>
       
       {/* Global Components */}
+      <AdmissionPopupAd />
       
       {/* The bottom App Drawer */}
       {!isStandalone && <Navbar />}

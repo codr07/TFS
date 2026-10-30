@@ -70,7 +70,31 @@ try {
       })
       .on(
         'postgres_changes',
+        { event: '*', schema: 'public', table: 'students_data' },
+        (payload: any) => {
+          notifyLocalListeners({
+            entity: 'students',
+            action: (payload.eventType?.toLowerCase() as any) || 'update',
+            id: payload.new?.id || payload.old?.id,
+            timestamp: Date.now(),
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
         { event: '*', schema: 'public', table: 'student_profiles' },
+        (payload: any) => {
+          notifyLocalListeners({
+            entity: 'students',
+            action: (payload.eventType?.toLowerCase() as any) || 'update',
+            id: payload.new?.id || payload.old?.id,
+            timestamp: Date.now(),
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'student_data' },
         (payload: any) => {
           notifyLocalListeners({
             entity: 'students',

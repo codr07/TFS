@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { jsPDF } from 'jspdf';
 import { AlertCircle, Eye, EyeOff, Lock, Mail } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseAdmin } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { saveFeePaymentRecord } from '../lib/tfsData';
 
@@ -65,53 +65,147 @@ const FeePayment = () => {
   const upiUri = `upi://pay?pa=codr%40slc&pn=TFS%20-%20The%20Fretboard%20Society&am=${amount.toFixed(2)}&cu=INR&tr=${paymentReference}&tn=${encodeURIComponent(`TFS Monthly Fee - ${data.name || 'Student'}`)}`;
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&margin=12&data=${encodeURIComponent(upiUri)}`;
 
+  const location = useLocation();
+  const passedStudent = (location.state as any)?.student;
+
+  useEffect(() => {
+    if (passedStudent) {
+      const scheduleStr = passedStudent.class_schedule || passedStudent.preferred_schedule || '';
+      const matchedClassType = scheduleStr.includes('Home Visit')
+        ? 'Home Visit — ₹1,500/month'
+        : scheduleStr.includes('Home Tuition')
+          ? 'Home Tuition — ₹1,300/month'
+          : scheduleStr.includes('Online')
+            ? 'Online — ₹900/month'
+            : passedStudent.monthly_fee === 1500
+              ? 'Home Visit — ₹1,500/month'
+              : passedStudent.monthly_fee === 900
+                ? 'Online — ₹900/month'
+                : 'Home Tuition — ₹1,300/month';
+
+      setStudentProfile({
+        curriculum: passedStudent.curriculum || 'Guitar',
+        class_schedule: scheduleStr,
+      });
+
+      setData((current) => ({
+        ...current,
+        name: `${passedStudent.first_name || ''} ${passedStudent.last_name || ''}`.trim(),
+        email: passedStudent.email || current.email,
+        phone: passedStudent.phone_number || passedStudent.phone || current.phone,
+        curriculum: passedStudent.curriculum || 'Guitar',
+        classType: matchedClassType,
+        addons: [], // Unselected by default per requirements
+      }));
+    }
+  }, [passedStudent]);
+
   useEffect(() => {
     if (authLoading) return;
     if (!user?.email) {
       setProfileLoading(false);
-      setStudentProfile(null);
+      if (!passedStudent) setStudentProfile(null);
       return;
     }
 
     let active = true;
     const loadProfile = async () => {
-      setProfileLoading(true);
-      setProfileError('');
-      const { data: profile, error: profileQueryError } = await supabase
-        .from('student_profiles')
-        .select('first_name,last_name,email,phone_number,curriculum,class_schedule,status')
-        .eq('email', user.email)
-        .eq('status', 'active')
-        .maybeSingle();
-
-      if (!active) return;
-      if (profileQueryError) {
-        setProfileError(profileQueryError.message);
-      } else if (!profile) {
-        setProfileError('Your account is not linked to an active student record. Please contact TFS administration.');
-      } else {
-        setStudentProfile(profile);
-        setData((current) => ({
-          ...current,
-          name: `${profile.first_name} ${profile.last_name}`.trim(),
-          email: profile.email,
-          phone: profile.phone_number || '',
-          curriculum: profile.curriculum || 'Guitar',
-          classType: profile.class_schedule?.includes('Home Visit')
-            ? 'Home Visit — ₹1,500/month'
-            : profile.class_schedule?.includes('Home Tuition')
-              ? 'Home Tuition — ₹1,300/month'
-              : profile.class_schedule?.includes('Online')
-                ? 'Online — ₹900/month'
-                : '',
-        }));
+      if (!passedStudent) {
+        setProfileLoading(true);
       }
-      setProfileLoading(false);
+      setProfileError('');
+
+      try {
+        // Query students_data (PRIMARY SOURCE)
+        let resolvedProfile: {
+          first_name?: string;
+          last_name?: string;
+          email?: string;
+          phone_number?: string;
+          curriculum?: string;
+          class_schedule?: string | null;
+          monthly_fee?: number | null;
+        } | null = null;
+
+        const userEmail = (user.email || '').trim();
+        if (!userEmail) return;
+
+        const { data: stdData, error: stdDataErr } = await supabaseAdmin
+          .from('students_data')
+          .select('*')
+          .ilike('email', userEmail)
+          .maybeSingle();
+
+        if (stdData && !stdDataErr) {
+          resolvedProfile = stdData;
+        } else {
+          // Fallback to student_profiles
+          const { data: spData, error: spErr } = await supabaseAdmin
+            .from('student_profiles')
+            .select('*')
+            .ilike('email', userEmail)
+            .maybeSingle();
+
+          if (spData && !spErr) {
+            resolvedProfile = spData;
+          } else {
+            // Also try student_data
+            const { data: sData } = await supabaseAdmin
+              .from('student_data')
+              .select('*')
+              .ilike('email', userEmail)
+              .maybeSingle();
+            if (sData) resolvedProfile = sData;
+          }
+        }
+
+        if (!active) return;
+
+        if (!resolvedProfile && !passedStudent) {
+          setProfileError('Your account is not linked to an active student record. Please contact TFS administration.');
+        } else if (resolvedProfile) {
+          setStudentProfile({
+            curriculum: resolvedProfile.curriculum || 'Guitar',
+            class_schedule: resolvedProfile.class_schedule || null,
+          });
+
+          const sched = resolvedProfile.class_schedule || '';
+          const matchedClassType = sched.includes('Home Visit')
+            ? 'Home Visit — ₹1,500/month'
+            : sched.includes('Home Tuition')
+              ? 'Home Tuition — ₹1,300/month'
+              : sched.includes('Online')
+                ? 'Online — ₹900/month'
+                : resolvedProfile.monthly_fee === 1500
+                  ? 'Home Visit — ₹1,500/month'
+                  : resolvedProfile.monthly_fee === 900
+                    ? 'Online — ₹900/month'
+                    : 'Home Tuition — ₹1,300/month';
+
+          setData((current) => ({
+            ...current,
+            name: `${resolvedProfile?.first_name || ''} ${resolvedProfile?.last_name || ''}`.trim() || current.name,
+            email: resolvedProfile?.email || user.email || current.email,
+            phone: resolvedProfile?.phone_number || current.phone,
+            curriculum: resolvedProfile?.curriculum || current.curriculum || 'Guitar',
+            classType: matchedClassType,
+            addons: current.addons.length > 0 ? current.addons : [], // Keep addons unchosen by default
+          }));
+        }
+      } catch (err: any) {
+        if (active && !passedStudent) {
+          setProfileError(err?.message || 'Error fetching student record');
+        }
+      } finally {
+        if (active) {
+          setProfileLoading(false);
+        }
+      }
     };
 
     void loadProfile();
     return () => { active = false; };
-  }, [authLoading, user]);
+  }, [authLoading, user, passedStudent]);
 
   useEffect(() => {
     if (!startedAt) return;

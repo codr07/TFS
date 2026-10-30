@@ -66,6 +66,7 @@ import {
   deleteAdmissionRecord,
   fetchSpreadsheetAdmissions,
   submitAdmissionToSpreadsheet,
+  syncAdmissionStatusToSpreadsheet,
   loadStoredFeePayments,
   fetchFeePayments,
   saveFeePaymentRecord,
@@ -415,73 +416,128 @@ const TfsControl = () => {
 
   // Convert admission to active student
   const handleEnrollAdmissionStudent = async (adm: AdmissionSubmission) => {
-    const existing = students.find((s) => s.email.toLowerCase() === adm.email.toLowerCase());
-    if (existing) {
-      const updated = await saveStudent({
-        ...existing,
-        status: 'active',
-        admission_id: adm.admission_id,
-        admission_fee_paid: true,
-        curriculum: adm.curriculum,
-        class_schedule: adm.class_type,
-        fee_status: 'Up to date',
-      });
-      setStudents(students.map((s) => (s.id === updated.id ? updated : s)));
-      notify(`Existing student ${updated.first_name} activated with admission plan.`);
-    } else {
-      const nameParts = adm.student_name.trim().split(' ');
-      const newStudent = await saveStudent({
-        first_name: nameParts[0] || 'Student',
-        last_name: nameParts.slice(1).join(' ') || '',
-        email: adm.email,
-        phone_number: adm.phone,
-        address: adm.address,
-        profession: adm.profession,
-        curriculum: adm.curriculum,
-        class_schedule: adm.class_type,
-        preferred_schedule: adm.schedule,
-        addons: adm.addons ? adm.addons.split(',').map((x) => x.trim()).filter(Boolean) : [],
-        monthly_fee: adm.base_tuition_fee + adm.addon_fee,
-        admission_id: adm.admission_id,
-        admission_fee_paid: true,
-        fee_status: 'Up to date',
-        status: 'active',
-        notes: `Enrolled via Admission form on ${new Date().toLocaleDateString('en-IN')}`,
-      });
-      setStudents([newStudent, ...students]);
-      notify(`Enrolled ${adm.student_name} as an active TFS student!`);
-    }
+    try {
+      const existing = students.find((s) => s.email.toLowerCase() === adm.email.toLowerCase());
+      if (existing) {
+        const updated = await saveStudent({
+          ...existing,
+          status: 'active',
+          admission_id: adm.admission_id,
+          admission_fee_paid: true,
+          curriculum: adm.curriculum,
+          class_schedule: adm.class_type,
+          fee_status: 'Up to date',
+        });
+        setStudents(students.map((s) => (s.id === updated.id ? updated : s)));
+        notify(`Existing student ${updated.first_name} activated with admission plan.`);
+      } else {
+        const nameParts = adm.student_name.trim().split(' ');
+        const newStudent = await saveStudent({
+          first_name: nameParts[0] || 'Student',
+          last_name: nameParts.slice(1).join(' ') || '',
+          email: adm.email,
+          phone_number: adm.phone,
+          address: adm.address,
+          profession: adm.profession,
+          curriculum: adm.curriculum,
+          class_schedule: adm.class_type,
+          preferred_schedule: adm.schedule,
+          addons: adm.addons ? adm.addons.split(',').map((x) => x.trim()).filter(Boolean) : [],
+          monthly_fee: (adm.base_tuition_fee || 0) + (adm.addon_fee || 0),
+          admission_id: adm.admission_id,
+          admission_fee_paid: true,
+          fee_status: 'Up to date',
+          status: 'active',
+          notes: `Enrolled via Admission form on ${new Date().toLocaleDateString('en-IN')}`,
+        });
+        setStudents([newStudent, ...students]);
+        notify(`Enrolled ${adm.student_name} as an active TFS student!`);
+      }
 
-    // Mark admission as VERIFIED
-    adm.payment_status = 'VERIFIED';
-    await saveAdmissionLocally(adm);
-    setAdmissions(await fetchAdmissions());
-    broadcastSync('admissions', 'update', adm.admission_id);
-    broadcastSync('students', 'update');
+      // Mark admission as VERIFIED in local state and database
+      adm.payment_status = 'VERIFIED';
+      await saveAdmissionLocally(adm);
+      setAdmissions((prev) =>
+        prev.map((a) => (a.admission_id === adm.admission_id || a.email === adm.email ? { ...a, payment_status: 'VERIFIED' } : a))
+      );
+
+      // Async sync to Google Sheets without blocking UI
+      syncAdmissionStatusToSpreadsheet(adm.admission_id, 'VERIFIED', {
+        email: adm.email,
+        notes: `Verified & enrolled on ${new Date().toLocaleDateString('en-IN')}`,
+      }).catch((e) => console.warn('Spreadsheet sync error:', e));
+
+      broadcastSync('admissions', 'update', adm.admission_id);
+      broadcastSync('students', 'update');
+    } catch (enrollErr: any) {
+      console.error('Enroll student error:', enrollErr);
+      fail(`Could not enroll student: ${enrollErr.message || enrollErr}`);
+    }
   };
 
-  // Update admission status
+  // Update admission status (Approve / Reject)
   const handleUpdateAdmissionStatus = async (adm: AdmissionSubmission, status: 'VERIFIED' | 'REJECTED') => {
-    adm.payment_status = status;
-    await saveAdmissionLocally(adm);
-    setAdmissions(await fetchAdmissions());
-    broadcastSync('admissions', 'update', adm.admission_id);
-    broadcastSync('students', 'update');
-    notify(`Admission ${adm.admission_id} marked as ${status}.`);
+    try {
+      adm.payment_status = status;
+      await saveAdmissionLocally(adm);
+
+      // Update UI state immediately
+      setAdmissions((prev) =>
+        prev.map((a) => (a.admission_id === adm.admission_id || a.email === adm.email ? { ...a, payment_status: status } : a))
+      );
+
+      // Also update student record if they exist in student list
+      const matchedStudent = students.find((s) => s.email.toLowerCase() === adm.email.toLowerCase());
+      if (matchedStudent) {
+        await saveStudent({
+          ...matchedStudent,
+          status: status === 'VERIFIED' ? 'active' : 'inactive',
+          fee_status: status === 'VERIFIED' ? 'Up to date' : 'Pending Verification',
+        });
+        setStudents(await loadStudents());
+      }
+
+      // Async sync to Google Sheets without blocking UI
+      syncAdmissionStatusToSpreadsheet(adm.admission_id, status, {
+        email: adm.email,
+        notes: `Marked as ${status} in TFS Admin Portal on ${new Date().toLocaleDateString('en-IN')}`,
+      }).catch((e) => console.warn('Spreadsheet sync error:', e));
+
+      broadcastSync('admissions', 'update', adm.admission_id);
+      broadcastSync('students', 'update');
+      notify(`Admission ${adm.admission_id} marked as ${status} successfully.`);
+    } catch (statusErr: any) {
+      console.error('Update admission status error:', statusErr);
+      fail(`Could not update admission: ${statusErr.message || statusErr}`);
+    }
   };
 
   // Fee payment verification
   const handleVerifyFeePayment = async (paymentId: string) => {
-    await updateFeePaymentStatus(paymentId, 'VERIFIED');
-    setFeePayments(await fetchFeePayments());
-    setStudents(await loadStudents());
-    notify('Fee payment marked as VERIFIED and student record updated.');
+    try {
+      await updateFeePaymentStatus(paymentId, 'VERIFIED');
+      setFeePayments((prev) =>
+        prev.map((p) => (p.id === paymentId || p.payment_reference === paymentId ? { ...p, payment_status: 'VERIFIED' } : p))
+      );
+      setStudents(await loadStudents());
+      notify('Fee payment marked as VERIFIED and synced to Google Sheets & Student Portal.');
+    } catch (vErr: any) {
+      console.error('Verify fee payment error:', vErr);
+      fail(`Could not verify payment: ${vErr.message || vErr}`);
+    }
   };
 
   const handleRejectFeePayment = async (paymentId: string) => {
-    await updateFeePaymentStatus(paymentId, 'REJECTED');
-    setFeePayments(await fetchFeePayments());
-    notify('Fee payment rejected.');
+    try {
+      await updateFeePaymentStatus(paymentId, 'REJECTED');
+      setFeePayments((prev) =>
+        prev.map((p) => (p.id === paymentId || p.payment_reference === paymentId ? { ...p, payment_status: 'REJECTED' } : p))
+      );
+      notify('Fee payment marked as REJECTED and updated in Google Sheets.');
+    } catch (rErr: any) {
+      console.error('Reject fee payment error:', rErr);
+      fail(`Could not reject payment: ${rErr.message || rErr}`);
+    }
   };
 
   const handleSavePaymentRecord = async (payment: FeePaymentRecord) => {
@@ -489,7 +545,7 @@ const TfsControl = () => {
     setFeePayments(await fetchFeePayments());
     setEditingPayment(null);
     setIsAddingPayment(false);
-    notify('Fee payment record saved successfully.');
+    notify('Fee payment record saved and synchronized with Google Sheets.');
   };
 
   return (
@@ -619,6 +675,7 @@ const TfsControl = () => {
             admissions={admissions}
             feePayments={feePayments}
             bookings={bookings}
+            requests={requests}
             onNavigate={setSection}
             loading={loading}
           />
@@ -1105,6 +1162,7 @@ const OverviewSection = ({
   admissions,
   feePayments,
   bookings,
+  requests,
   onNavigate,
   loading,
 }: {
@@ -1113,12 +1171,14 @@ const OverviewSection = ({
   admissions: AdmissionSubmission[];
   feePayments: FeePaymentRecord[];
   bookings: RecordValue[];
+  requests: RecordValue[];
   onNavigate: (s: Section) => void;
   loading: boolean;
 }) => {
   const pendingPayments = feePayments.filter((p) => p.payment_status === 'PENDING VERIFICATION').length;
   const pendingAdmissions = admissions.filter((a) => a.payment_status === 'PENDING VERIFICATION').length;
   const activeStudents = students.filter((s) => s.status === 'active').length;
+  const pendingRequests = requests.filter((r) => r.status === 'pending').length;
 
   return (
     <>
@@ -1127,7 +1187,7 @@ const OverviewSection = ({
           <Users size={20} color="var(--gold)" />
           <span>Active Students</span>
           <strong>{activeStudents}</strong>
-          <small>{students.length} total profiles</small>
+          <small>{students.length} synced student accounts</small>
         </div>
         <div className="admin-stat">
           <CreditCard size={20} color="var(--gold)" />
@@ -1145,80 +1205,123 @@ const OverviewSection = ({
           <CircleDollarSign size={20} color="var(--gold)" />
           <span>Active Fee Plans</span>
           <strong>{fees.length}</strong>
-          <small>{loading ? 'Loading...' : `${bookings.length} enquiries`}</small>
+          <small>{loading ? 'Loading...' : `${bookings.length} enquiries · ${pendingRequests} pending requests`}</small>
         </div>
       </section>
 
       <div className="admin-grid-two">
-        {/* Recent Fee Payments */}
+        {/* Recent Enrolled Students */}
         <section className="admin-panel">
           <div className="admin-panel-heading">
             <div>
-              <p className="admin-kicker">Recent Activity</p>
-              <h2>Latest Student Fee Payments</h2>
+              <p className="admin-kicker">Database Roster</p>
+              <h2>Enrolled Students</h2>
             </div>
-            <button className="admin-link" onClick={() => onNavigate('feepayments')}>
-              All payments →
+            <button className="admin-link" onClick={() => onNavigate('students')}>
+              All students ({students.length}) →
             </button>
           </div>
-          {feePayments.length === 0 ? (
-            <p className="admin-empty">No fee payment submissions recorded yet.</p>
+          {students.length === 0 ? (
+            <p className="admin-empty">No student records found in database.</p>
           ) : (
-            feePayments.slice(0, 5).map((pay) => (
-              <div className="booking-row" key={pay.id || pay.payment_reference}>
-                <div className="booking-avatar">{(pay.student_name || 'S').charAt(0).toUpperCase()}</div>
+            students.slice(0, 5).map((student) => (
+              <div className="booking-row" key={student.id}>
+                <div className="booking-avatar">
+                  {student.avatar_url ? (
+                    <img src={student.avatar_url} alt={student.first_name} style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                  ) : (
+                    (student.first_name || 'S').charAt(0).toUpperCase()
+                  )}
+                </div>
                 <div className="booking-person">
-                  <b>{pay.student_name}</b>
-                  <small>{pay.student_email} · ₹{pay.amount.toLocaleString('en-IN')}</small>
+                  <b>{`${student.first_name} ${student.last_name}`.trim()}</b>
+                  <small>{student.email} · {student.curriculum} ({student.class_schedule || 'Active Plan'})</small>
                 </div>
                 <span
                   className="booking-badge"
                   style={{
-                    background:
-                      pay.payment_status === 'VERIFIED'
-                        ? 'rgba(40,167,69,0.2)'
-                        : pay.payment_status === 'REJECTED'
-                          ? 'rgba(220,53,69,0.2)'
-                          : 'rgba(212,175,55,0.2)',
-                    color:
-                      pay.payment_status === 'VERIFIED'
-                        ? '#5dd37a'
-                        : pay.payment_status === 'REJECTED'
-                          ? '#ff6b6b'
-                          : 'var(--gold)',
+                    background: student.status === 'active' ? 'rgba(40,167,69,0.2)' : 'rgba(212,175,55,0.2)',
+                    color: student.status === 'active' ? '#5dd37a' : 'var(--gold)',
                   }}
                 >
-                  {pay.payment_status}
+                  {student.fee_status || student.status || 'Active'}
                 </span>
               </div>
             ))
           )}
         </section>
 
-        {/* Quick Management Shortcuts */}
-        <section className="admin-panel">
-          <div className="admin-panel-heading">
-            <div>
-              <p className="admin-kicker">Control Center</p>
-              <h2>Quick Actions</h2>
+        {/* Recent Fee Payments & Quick Shortcuts */}
+        <div style={{ display: 'grid', gap: '1.5rem' }}>
+          <section className="admin-panel">
+            <div className="admin-panel-heading">
+              <div>
+                <p className="admin-kicker">Recent Activity</p>
+                <h2>Latest Student Fee Payments</h2>
+              </div>
+              <button className="admin-link" onClick={() => onNavigate('feepayments')}>
+                All payments →
+              </button>
             </div>
-          </div>
-          <button className="admin-action" onClick={() => onNavigate('students')}>
-            <Users size={18} /> Manage Student Accounts &amp; Plans
-          </button>
-          <button className="admin-action" onClick={() => onNavigate('feepayments')}>
-            <CreditCard size={18} /> Review &amp; Verify Monthly Fees
-          </button>
-          <button className="admin-action" onClick={() => onNavigate('admissions')}>
-            <FileText size={18} /> Review Admission Applications
-          </button>
-          <button className="admin-action" onClick={() => onNavigate('fees')}>
-            <CircleDollarSign size={18} /> Configure Tuition Fee Plans
-          </button>
-          <button className="admin-action" onClick={() => onNavigate('curriculum')}>
-            <BookOpen size={18} /> Update Curriculum Modules
-          </button>
-        </section>
+            {feePayments.length === 0 ? (
+              <p className="admin-empty">No fee payment submissions recorded yet.</p>
+            ) : (
+              feePayments.slice(0, 4).map((pay) => (
+                <div className="booking-row" key={pay.id || pay.payment_reference}>
+                  <div className="booking-avatar">{(pay.student_name || 'S').charAt(0).toUpperCase()}</div>
+                  <div className="booking-person">
+                    <b>{pay.student_name}</b>
+                    <small>{pay.student_email} · ₹{pay.amount.toLocaleString('en-IN')}</small>
+                  </div>
+                  <span
+                    className="booking-badge"
+                    style={{
+                      background:
+                        pay.payment_status === 'VERIFIED'
+                          ? 'rgba(40,167,69,0.2)'
+                          : pay.payment_status === 'REJECTED'
+                            ? 'rgba(220,53,69,0.2)'
+                            : 'rgba(212,175,55,0.2)',
+                      color:
+                        pay.payment_status === 'VERIFIED'
+                          ? '#5dd37a'
+                          : pay.payment_status === 'REJECTED'
+                            ? '#ff6b6b'
+                            : 'var(--gold)',
+                    }}
+                  >
+                    {pay.payment_status}
+                  </span>
+                </div>
+              ))
+            )}
+          </section>
+
+          {/* Quick Management Shortcuts */}
+          <section className="admin-panel">
+            <div className="admin-panel-heading">
+              <div>
+                <p className="admin-kicker">Control Center</p>
+                <h2>Quick Actions</h2>
+              </div>
+            </div>
+            <button className="admin-action" onClick={() => onNavigate('students')}>
+              <Users size={18} /> Manage Student Accounts ({students.length}) &amp; Plans
+            </button>
+            <button className="admin-action" onClick={() => onNavigate('feepayments')}>
+              <CreditCard size={18} /> Review &amp; Verify Monthly Fees ({feePayments.length})
+            </button>
+            <button className="admin-action" onClick={() => onNavigate('admissions')}>
+              <FileText size={18} /> Review Admission Applications ({admissions.length})
+            </button>
+            <button className="admin-action" onClick={() => onNavigate('fees')}>
+              <CircleDollarSign size={18} /> Configure Tuition Fee Plans ({fees.length})
+            </button>
+            <button className="admin-action" onClick={() => onNavigate('curriculum')}>
+              <BookOpen size={18} /> Update Curriculum Modules
+            </button>
+          </section>
+        </div>
       </div>
     </>
   );
@@ -1370,23 +1473,30 @@ const StudentsSection = ({
                       </div>
                     )}
                   </div>
-                  <div>
-                    <b>{`${student.first_name} ${student.last_name}`.trim() || 'Student'}</b>
-                    <small style={{ display: 'block' }}>{student.email || 'No email'} · {student.phone_number || 'No phone'}</small>
+                  <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                    <b style={{ display: 'block', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                      {`${student.first_name} ${student.last_name}`.trim() || 'Student'}
+                    </b>
+                    <small style={{ display: 'block', color: 'var(--text-secondary)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                      {student.email || 'No email'}
+                    </small>
+                    <small style={{ display: 'block', color: 'var(--text-secondary)' }}>
+                      {student.phone_number || 'No phone'}
+                    </small>
                     {student.admission_id && (
-                      <small style={{ color: 'var(--gold)', fontFamily: 'monospace' }}>
-                        Adm ID: {student.admission_id}
+                      <small style={{ color: 'var(--gold)', fontFamily: 'monospace', display: 'inline-block', marginTop: '0.15rem' }}>
+                        Adm: {student.admission_id}
                       </small>
                     )}
                   </div>
                 </div>
               </span>
-              <span>
-                <b>{student.curriculum || 'Guitar'}</b>
-                <small>{student.class_schedule || 'Active Plan'}</small>
-                <small>Slot: {student.preferred_schedule || 'Flexible'}</small>
+              <span style={{ minWidth: 0 }}>
+                <b style={{ color: '#fff', display: 'block' }}>{student.curriculum || 'Guitar'}</b>
+                <small style={{ display: 'block', color: 'var(--text-secondary)' }}>{student.class_schedule || 'Active Plan'}</small>
+                <small style={{ display: 'block', color: 'var(--text-secondary)' }}>Slot: {student.preferred_schedule || 'Flexible'}</small>
                 {student.addons && student.addons.length > 0 && (
-                  <small style={{ color: '#5dd37a' }}>+ {student.addons.join(', ')}</small>
+                  <small style={{ color: '#5dd37a', display: 'block' }}>+ {student.addons.join(', ')}</small>
                 )}
 
                 {/* Live Progress Bar in Admin Row */}
@@ -1427,15 +1537,15 @@ const StudentsSection = ({
                   )}
                 </div>
               </span>
-              <span>
-                <b style={{ color: 'var(--gold)' }}>
+              <span style={{ minWidth: 0 }}>
+                <b style={{ color: 'var(--gold)', display: 'block', fontSize: '1.05rem' }}>
                   ₹{(student.monthly_fee || 1300).toLocaleString('en-IN')}/mo
                 </b>
                 <span
                   className="booking-badge"
                   style={{
                     display: 'inline-block',
-                    marginTop: '0.25rem',
+                    marginTop: '0.35rem',
                     background:
                       student.fee_status === 'Up to date'
                         ? 'rgba(40,167,69,0.2)'
@@ -1455,6 +1565,7 @@ const StudentsSection = ({
                 <span
                   style={{
                     display: 'block',
+                    marginTop: '0.2rem',
                     fontSize: '0.72rem',
                     color: student.status === 'active' ? '#5dd37a' : 'var(--text-secondary)',
                   }}
@@ -1832,7 +1943,227 @@ const StudentProgressModal = ({
   );
 };
 
-// Student Edit Modal with Dynamic Dropdowns
+// Interactive Circular Clock Dial Time Picker
+const ClockDialPicker = ({
+  value,
+  onChange,
+}: {
+  value: string; // e.g. "10:30 AM" or "10am - 1pm"
+  onChange: (val: string) => void;
+}) => {
+  // Parse initial hour, minute, period
+  const parseTime = (str: string) => {
+    const match = str.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    let h = 10;
+    let m = 0;
+    let p: 'AM' | 'PM' = 'AM';
+    if (match) {
+      h = parseInt(match[1], 10);
+      if (h > 12) {
+        h = h - 12;
+        p = 'PM';
+      } else if (h === 0) {
+        h = 12;
+      }
+      if (match[2]) m = parseInt(match[2], 10);
+      if (match[3]) p = match[3].toUpperCase() as 'AM' | 'PM';
+    }
+    return { h, m, p };
+  };
+
+  const initial = parseTime(value || '10:00 AM');
+  const [hour, setHour] = useState(initial.h);
+  const [minute, setMinute] = useState(initial.m);
+  const [period, setPeriod] = useState<'AM' | 'PM'>(initial.p);
+  const [mode, setMode] = useState<'hour' | 'minute'>('hour');
+
+  const updateTime = (newH: number, newM: number, newP: 'AM' | 'PM') => {
+    const minStr = String(newM).padStart(2, '0');
+    onChange(`${newH}:${minStr} ${newP}`);
+  };
+
+  const handleSelectHour = (h: number) => {
+    setHour(h);
+    updateTime(h, minute, period);
+    setMode('minute');
+  };
+
+  const handleSelectMinute = (m: number) => {
+    setMinute(m);
+    updateTime(hour, m, period);
+  };
+
+  const handleTogglePeriod = (p: 'AM' | 'PM') => {
+    setPeriod(p);
+    updateTime(hour, minute, p);
+  };
+
+  const hours = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const minutes = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+
+  // Radial positions (12 positions in a circle)
+  const radius = 68;
+  const center = 90;
+
+  return (
+    <div
+      style={{
+        background: '#090c10',
+        border: '1px solid rgba(212,175,55,0.3)',
+        borderRadius: '12px',
+        padding: '1rem',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '0.75rem',
+        maxWidth: '320px',
+        margin: '0 auto',
+      }}
+    >
+      {/* Time Display & Mode Switches */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <button
+          type="button"
+          onClick={() => setMode('hour')}
+          style={{
+            padding: '0.4rem 0.75rem',
+            borderRadius: '8px',
+            background: mode === 'hour' ? 'var(--gold)' : 'rgba(255,255,255,0.06)',
+            color: mode === 'hour' ? '#000' : '#fff',
+            fontWeight: 700,
+            fontSize: '1.2rem',
+            border: 'none',
+            cursor: 'pointer',
+          }}
+        >
+          {String(hour).padStart(2, '0')}
+        </button>
+        <span style={{ color: 'var(--gold)', fontSize: '1.2rem', fontWeight: 700 }}>:</span>
+        <button
+          type="button"
+          onClick={() => setMode('minute')}
+          style={{
+            padding: '0.4rem 0.75rem',
+            borderRadius: '8px',
+            background: mode === 'minute' ? 'var(--gold)' : 'rgba(255,255,255,0.06)',
+            color: mode === 'minute' ? '#000' : '#fff',
+            fontWeight: 700,
+            fontSize: '1.2rem',
+            border: 'none',
+            cursor: 'pointer',
+          }}
+        >
+          {String(minute).padStart(2, '0')}
+        </button>
+
+        {/* AM / PM Toggle */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginLeft: '0.4rem' }}>
+          <button
+            type="button"
+            onClick={() => handleTogglePeriod('AM')}
+            style={{
+              padding: '0.2rem 0.5rem',
+              borderRadius: '4px',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              background: period === 'AM' ? 'var(--gold)' : 'rgba(255,255,255,0.06)',
+              color: period === 'AM' ? '#000' : 'var(--text-secondary)',
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            AM
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTogglePeriod('PM')}
+            style={{
+              padding: '0.2rem 0.5rem',
+              borderRadius: '4px',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              background: period === 'PM' ? 'var(--gold)' : 'rgba(255,255,255,0.06)',
+              color: period === 'PM' ? '#000' : 'var(--text-secondary)',
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            PM
+          </button>
+        </div>
+      </div>
+
+      <small style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+        Click dial numbers to set {mode === 'hour' ? 'Hour' : 'Minute'}
+      </small>
+
+      {/* Clock Face Dial */}
+      <div
+        style={{
+          position: 'relative',
+          width: '180px',
+          height: '180px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, #151a24 0%, #0d1117 100%)',
+          border: '2px solid rgba(212,175,55,0.25)',
+          boxShadow: 'inset 0 0 15px rgba(0,0,0,0.8)',
+        }}
+      >
+        {/* Center Pivot */}
+        <div
+          style={{
+            position: 'absolute',
+            top: `${center - 4}px`,
+            left: `${center - 4}px`,
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            background: 'var(--gold)',
+            zIndex: 3,
+          }}
+        />
+
+        {/* Dial Numbers */}
+        {(mode === 'hour' ? hours : minutes).map((val, idx) => {
+          // Angle in radians (0 at top / 12 o'clock, clockwise)
+          const angle = (idx * 30 - 90) * (Math.PI / 180);
+          const x = center + radius * Math.cos(angle);
+          const y = center + radius * Math.sin(angle);
+          const isSelected = mode === 'hour' ? hour === val : minute === val;
+
+          return (
+            <button
+              key={val}
+              type="button"
+              onClick={() => (mode === 'hour' ? handleSelectHour(val) : handleSelectMinute(val))}
+              style={{
+                position: 'absolute',
+                top: `${y - 14}px`,
+                left: `${x - 14}px`,
+                width: '28px',
+                height: '28px',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.78rem',
+                fontWeight: isSelected ? 800 : 500,
+                background: isSelected ? 'var(--gold)' : 'transparent',
+                color: isSelected ? '#000' : 'rgba(255,255,255,0.85)',
+                border: 'none',
+                cursor: 'pointer',
+                zIndex: 2,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {val}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 const StudentEditModal = ({
   student,
   onCancel,
@@ -1850,6 +2181,10 @@ const StudentEditModal = ({
 }) => {
   const [form, setForm] = useState<StudentProfile>({ ...student });
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setForm({ ...student });
+  }, [student]);
 
   // Dynamic plan options
   const planOptions = useMemo(() => {
@@ -1877,6 +2212,68 @@ const StudentEditModal = ({
     }
     return list;
   }, [addonsList]);
+
+  // Helper to format Date into Sunday "YYYY-MM-DD"
+  const getNextSunday = () => {
+    const d = new Date();
+    const day = d.getDay();
+    const diff = (7 - day) % 7;
+    d.setDate(d.getDate() + (diff === 0 ? 0 : diff));
+    return d.toISOString().split('T')[0];
+  };
+
+  const [scheduleMode, setScheduleMode] = useState<'standard' | 'custom'>(() => {
+    const curr = (student.preferred_schedule || '').toLowerCase();
+    if (curr.includes('—') && (curr.includes('am') || curr.includes('pm')) && /\d/.test(curr)) {
+      return 'custom';
+    }
+    return 'standard';
+  });
+
+  const [sundayDate, setSundayDate] = useState(() => {
+    return getNextSunday();
+  });
+  const [customTime, setCustomTime] = useState('10:00 AM');
+  const [sundayError, setSundayError] = useState('');
+
+  const handleSundayDateChange = (dateVal: string) => {
+    setSundayDate(dateVal);
+    if (!dateVal) {
+      setSundayError('');
+      return;
+    }
+    const d = new Date(dateVal + 'T00:00:00');
+    if (d.getDay() !== 0) {
+      setSundayError('Selected day is not Sunday. Sunday classes only.');
+    } else {
+      setSundayError('');
+      const formattedDate = d.toLocaleDateString('en-IN', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      });
+      setForm((prev) => ({
+        ...prev,
+        preferred_schedule: `${formattedDate} — ${customTime}`,
+      }));
+    }
+  };
+
+  const handleCustomTimeChange = (timeVal: string) => {
+    setCustomTime(timeVal);
+    const d = sundayDate ? new Date(sundayDate + 'T00:00:00') : new Date();
+    const formattedDate = d.toLocaleDateString('en-IN', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+    setForm((prev) => ({
+      ...prev,
+      preferred_schedule: `${formattedDate} — ${timeVal}`,
+    }));
+  };
 
   // Recalculate fee dynamically when plan or addons change
   const handlePlanChange = (plan: string) => {
@@ -2078,21 +2475,115 @@ const StudentEditModal = ({
               </select>
             </label>
 
-            {/* Section: DYNAMIC SCHEDULE DROPDOWN */}
-            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-              Batch Schedule Window (Database Synced) *
-              <select
-                value={form.preferred_schedule || scheduleOptions[0]}
-                onChange={(e) => setForm({ ...form, preferred_schedule: e.target.value })}
-                style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
-              >
-                {scheduleOptions.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* Section: BATCH SCHEDULE & NEXT CLASS CUSTOMIZATION */}
+            <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.6rem', padding: '1rem', background: 'rgba(212,175,55,0.04)', borderRadius: '10px', border: '1px solid rgba(212,175,55,0.2)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--gold)', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Calendar size={15} /> Student Schedule &amp; Next Class Fixer (Admin Only)
+                </span>
+                {/* Mode Selector */}
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScheduleMode('standard');
+                      setForm((prev) => ({
+                        ...prev,
+                        preferred_schedule: scheduleOptions[0] || 'Sunday — 10am - 1pm',
+                      }));
+                    }}
+                    style={{
+                      padding: '0.3rem 0.65rem',
+                      fontSize: '0.75rem',
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: scheduleMode === 'standard' ? 'var(--gold)' : 'rgba(255,255,255,0.08)',
+                      color: scheduleMode === 'standard' ? '#000' : 'var(--text-secondary)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Usual Batch Window
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScheduleMode('custom');
+                      const d = sundayDate ? new Date(sundayDate + 'T00:00:00') : new Date();
+                      const formattedDate = d.toLocaleDateString('en-IN', {
+                        weekday: 'long',
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                      });
+                      setForm((prev) => ({
+                        ...prev,
+                        preferred_schedule: `${formattedDate} — ${customTime}`,
+                      }));
+                    }}
+                    style={{
+                      padding: '0.3rem 0.65rem',
+                      fontSize: '0.75rem',
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: scheduleMode === 'custom' ? 'var(--gold)' : 'rgba(255,255,255,0.08)',
+                      color: scheduleMode === 'custom' ? '#000' : 'var(--text-secondary)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Custom Sunday &amp; Time Dial
+                  </button>
+                </div>
+              </div>
+
+              {scheduleMode === 'standard' ? (
+                <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                  Select Standard Batch Schedule Slot
+                  <select
+                    value={form.preferred_schedule || scheduleOptions[0]}
+                    onChange={(e) => setForm({ ...form, preferred_schedule: e.target.value })}
+                    style={{ padding: '0.75rem', background: '#111', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#fff' }}
+                  >
+                    {scheduleOptions.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div style={{ display: 'grid', gap: '0.85rem' }}>
+                  {/* Sunday Date Picker */}
+                  <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                    <span>Next Class Date (Sundays Only) *</span>
+                    <input
+                      type="date"
+                      value={sundayDate}
+                      onChange={(e) => handleSundayDateChange(e.target.value)}
+                      style={{ padding: '0.75rem', background: '#111', border: sundayError ? '1px solid #ff6b6b' : '1px solid var(--gold)', borderRadius: '8px', color: '#fff' }}
+                    />
+                    {sundayError && (
+                      <span style={{ color: '#ff6b6b', fontSize: '0.75rem' }}>{sundayError}</span>
+                    )}
+                  </label>
+
+                  {/* Interactive Clock Dial Time Picker */}
+                  <div>
+                    <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.4rem' }}>
+                      Class Time Picker (Dial) *
+                    </span>
+                    <ClockDialPicker value={customTime} onChange={handleCustomTimeChange} />
+                  </div>
+
+                  {/* Fixed Schedule Preview */}
+                  <div style={{ padding: '0.65rem 0.85rem', background: 'rgba(93,211,122,0.08)', borderRadius: '6px', border: '1px solid rgba(93,211,122,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Fixed Schedule Applied:</span>
+                    <b style={{ color: '#5dd37a', fontSize: '0.85rem' }}>{form.preferred_schedule}</b>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Section: DYNAMIC ADDONS DROPDOWN */}
             <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
@@ -2159,6 +2650,47 @@ const StudentEditModal = ({
                 placeholder="e.g. TFS-20261012-ABCDE"
                 onChange={(e) => setForm({ ...form, admission_id: e.target.value })}
                 style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', fontFamily: 'monospace' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Profession / Occupation
+              <input
+                value={form.profession || ''}
+                placeholder="e.g. Software Engineer, College Student"
+                onChange={(e) => setForm({ ...form, profession: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Emergency Contact Name
+              <input
+                value={form.emergency_contact || ''}
+                placeholder="Parent / Guardian / Spouse"
+                onChange={(e) => setForm({ ...form, emergency_contact: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Emergency Phone Number
+              <input
+                value={form.emergency_phone || ''}
+                placeholder="+91 98765 00000"
+                onChange={(e) => setForm({ ...form, emergency_phone: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff' }}
+              />
+            </label>
+
+            <label style={{ gridColumn: '1 / -1', display: 'grid', gap: '0.35rem', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+              Student Bio / Background Notes
+              <textarea
+                rows={2}
+                value={form.bio || ''}
+                placeholder="Musical experience, goals or background"
+                onChange={(e) => setForm({ ...form, bio: e.target.value })}
+                style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', resize: 'vertical' }}
               />
             </label>
 
@@ -2356,26 +2888,32 @@ const FeePaymentsSection = ({
 
       {/* Payments Table */}
       <div className="admin-table">
-        <div className="admin-table-row admin-table-head">
+        <div className="admin-table-row admin-table-head" style={{ gridTemplateColumns: 'minmax(220px, 1.4fr) minmax(210px, 1.3fr) minmax(180px, 1fr) minmax(240px, 1.3fr)' }}>
           <span>Student &amp; Payer</span>
           <span>Payment Details &amp; UTR</span>
           <span>Status &amp; Date</span>
-          <span>Actions</span>
+          <span style={{ textAlign: 'right' }}>Payment Actions</span>
         </div>
         {filtered.length === 0 ? (
           <p className="admin-empty">No fee payment records found for the selected filter.</p>
         ) : (
           filtered.map((pay) => (
-            <div className="admin-table-row" key={pay.id || pay.payment_reference}>
+            <div
+              className="admin-table-row"
+              key={pay.id || pay.payment_reference}
+              style={{ gridTemplateColumns: 'minmax(220px, 1.4fr) minmax(210px, 1.3fr) minmax(180px, 1fr) minmax(240px, 1.3fr)' }}
+            >
               <span>
-                <b>{pay.student_name}</b>
-                <small>{pay.student_email}</small>
-                <small style={{ color: 'var(--text-secondary)' }}>Payer: {pay.payer_name || 'Student'}</small>
+                <b style={{ fontSize: '0.96rem', color: '#fff' }}>{pay.student_name}</b>
+                <small style={{ color: 'var(--gold)' }}>{pay.student_email}</small>
+                <small style={{ color: 'var(--text-secondary)' }}>
+                  Payer: <span style={{ color: '#fff' }}>{pay.payer_name || 'Self'}</span>
+                </small>
               </span>
               <span>
-                <b style={{ color: 'var(--gold)' }}>₹{pay.amount.toLocaleString('en-IN')}</b>
-                <small>{pay.curriculum} · {pay.class_type}</small>
-                <small style={{ fontFamily: 'monospace' }}>UTR: {pay.utr || '—'}</small>
+                <b style={{ color: 'var(--gold)', fontSize: '1.05rem' }}>₹{pay.amount.toLocaleString('en-IN')}</b>
+                <small style={{ color: 'var(--text-primary)' }}>{pay.curriculum || 'General'} {pay.class_type ? `· ${pay.class_type}` : ''}</small>
+                <small style={{ fontFamily: 'monospace', color: '#fff' }}>UTR: {pay.utr || '—'}</small>
                 {pay.payment_reference && (
                   <small style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>Ref: {pay.payment_reference}</small>
                 )}
@@ -2385,6 +2923,7 @@ const FeePaymentsSection = ({
                   className="booking-badge"
                   style={{
                     display: 'inline-block',
+                    width: 'fit-content',
                     background:
                       pay.payment_status === 'VERIFIED'
                         ? 'rgba(40,167,69,0.2)'
@@ -2397,42 +2936,61 @@ const FeePaymentsSection = ({
                         : pay.payment_status === 'REJECTED'
                           ? '#ff6b6b'
                           : 'var(--gold)',
+                    fontWeight: 600,
                   }}
                 >
                   {pay.payment_status}
                 </span>
                 <small style={{ display: 'block', marginTop: '0.2rem', color: 'var(--text-secondary)' }}>
-                  {pay.timestamp ? new Date(pay.timestamp).toLocaleDateString('en-IN') : '—'}
+                  {pay.timestamp ? new Date(pay.timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                 </small>
               </span>
               <span className="admin-row-actions">
                 {pay.payment_status !== 'VERIFIED' && (
                   <button
-                    title="Verify Fee Payment"
-                    onClick={() => void onVerify(pay.id || pay.payment_reference)}
-                    style={{ color: '#5dd37a', borderColor: 'rgba(93,211,122,0.3)' }}
+                    type="button"
+                    className="admin-btn-action action-success"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onVerify(pay.id || pay.payment_reference);
+                    }}
                   >
-                    <CheckCircle size={15} />
+                    <CheckCircle size={14} /> Verify
                   </button>
                 )}
                 {pay.payment_status !== 'REJECTED' && (
                   <button
-                    title="Reject Payment"
-                    onClick={() => void onReject(pay.id || pay.payment_reference)}
-                    style={{ color: '#ff6b6b', borderColor: 'rgba(255,107,107,0.3)' }}
+                    type="button"
+                    className="admin-btn-action action-danger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onReject(pay.id || pay.payment_reference);
+                    }}
                   >
-                    <XCircle size={15} />
+                    <XCircle size={14} /> Reject
                   </button>
                 )}
-                <button title="Edit Record" onClick={() => setEditing(pay)}>
-                  <Pencil size={15} />
+                <button
+                  type="button"
+                  className="admin-btn-icon"
+                  title="Edit Record"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditing(pay);
+                  }}
+                >
+                  <Pencil size={14} />
                 </button>
                 <button
+                  type="button"
+                  className="admin-btn-icon danger"
                   title="Delete Payment Record"
-                  onClick={() => onAskDelete(pay.id || pay.payment_reference, pay.student_name)}
-                  style={{ color: '#ff6b6b', borderColor: 'rgba(255,107,107,0.3)' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAskDelete(pay.id || pay.payment_reference, pay.student_name);
+                  }}
                 >
-                  <Trash2 size={15} />
+                  <Trash2 size={14} />
                 </button>
               </span>
             </div>
@@ -2607,37 +3165,42 @@ const AdmissionsSection = ({
         <p className="admin-empty">No admission submissions found yet.</p>
       ) : (
         <div className="admin-table">
-          <div className="admin-table-row admin-table-head" style={{ gridTemplateColumns: 'minmax(200px, 1.5fr) minmax(180px, 1.2fr) minmax(120px, 1fr) auto' }}>
-            <span>Applicant</span>
-            <span>Program &amp; Schedule</span>
-            <span>Payment &amp; UTR</span>
-            <span>Actions</span>
+          <div className="admin-table-row admin-table-head" style={{ gridTemplateColumns: 'minmax(220px, 1.4fr) minmax(200px, 1.2fr) minmax(180px, 1.1fr) minmax(240px, 1.3fr)' }}>
+            <span>Applicant Profile</span>
+            <span>Course &amp; Schedule</span>
+            <span>Fee &amp; Payment Status</span>
+            <span style={{ textAlign: 'right' }}>Admission Actions</span>
           </div>
           {admissions.map((adm) => (
             <div
               className="admin-table-row"
               key={adm.admission_id || adm.id}
-              style={{ gridTemplateColumns: 'minmax(200px, 1.5fr) minmax(180px, 1.2fr) minmax(120px, 1fr) auto' }}
+              style={{ gridTemplateColumns: 'minmax(220px, 1.4fr) minmax(200px, 1.2fr) minmax(180px, 1.1fr) minmax(240px, 1.3fr)' }}
             >
               <span>
-                <b>{adm.student_name}</b>
-                <small>{adm.email} · {adm.phone}</small>
-                <small style={{ color: 'var(--text-secondary)' }}>{adm.profession} · {adm.address}</small>
-                <small style={{ color: 'var(--gold)', fontFamily: 'monospace' }}>ID: {adm.admission_id}</small>
+                <b style={{ fontSize: '0.96rem', color: '#fff' }}>{adm.student_name}</b>
+                <small style={{ color: 'var(--gold)' }}>{adm.email}</small>
+                <small>{adm.phone || '—'}</small>
+                <small style={{ color: 'var(--text-secondary)' }}>
+                  {adm.profession ? `${adm.profession} · ` : ''}{adm.address || ''}
+                </small>
+                <small style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>ID: {adm.admission_id}</small>
               </span>
               <span>
-                <b>{adm.curriculum}</b>
-                <small>{adm.class_type}</small>
-                {adm.addons && <small style={{ color: '#5dd37a' }}>+ {adm.addons}</small>}
-                <small>Slot: {adm.schedule || 'Weekend session'}</small>
+                <b style={{ color: '#fff' }}>{adm.curriculum}</b>
+                <span style={{ display: 'inline-block', fontSize: '0.78rem', color: 'var(--gold)', background: 'rgba(212,175,55,0.1)', padding: '0.15rem 0.5rem', borderRadius: '4px', width: 'fit-content' }}>
+                  {adm.class_type || 'Regular'}
+                </span>
+                {adm.addons && <small style={{ color: '#5dd37a', fontWeight: 600 }}>+ {adm.addons}</small>}
+                <small style={{ color: 'var(--text-secondary)' }}>Schedule: {adm.schedule || 'Weekend session'}</small>
               </span>
               <span>
-                <b style={{ color: 'var(--gold)' }}>₹{adm.payment_amount.toLocaleString('en-IN')}</b>
+                <b style={{ color: 'var(--gold)', fontSize: '1.05rem' }}>₹{adm.payment_amount.toLocaleString('en-IN')}</b>
                 <span
                   className="booking-badge"
                   style={{
                     display: 'inline-block',
-                    marginTop: '0.2rem',
+                    width: 'fit-content',
                     background:
                       adm.payment_status === 'VERIFIED'
                         ? 'rgba(40,167,69,0.2)'
@@ -2650,43 +3213,59 @@ const AdmissionsSection = ({
                         : adm.payment_status === 'REJECTED'
                           ? '#ff6b6b'
                           : 'var(--gold)',
+                    fontWeight: 600,
                   }}
                 >
                   {adm.payment_status}
                 </span>
-                <small style={{ display: 'block', fontFamily: 'monospace' }}>UTR: {adm.utr || '—'}</small>
-                <small style={{ color: 'var(--text-secondary)' }}>Payer: {adm.payer_name}</small>
+                <small style={{ fontFamily: 'monospace', color: '#fff' }}>UTR: {adm.utr || '—'}</small>
+                <small style={{ color: 'var(--text-secondary)' }}>Payer: {adm.payer_name || adm.student_name}</small>
               </span>
               <span className="admin-row-actions">
                 <button
-                  title="Enroll / Activate as Student Profile"
-                  onClick={() => onEnrollStudent(adm)}
-                  style={{ color: '#5dd37a', borderColor: 'rgba(93,211,122,0.3)' }}
+                  type="button"
+                  className="admin-btn-action action-gold"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEnrollStudent(adm);
+                  }}
                 >
-                  <UserCheck size={16} />
+                  <UserCheck size={14} /> Enroll
                 </button>
                 {adm.payment_status !== 'VERIFIED' && (
                   <button
-                    title="Mark Payment as Verified"
-                    onClick={() => onUpdateStatus(adm, 'VERIFIED')}
+                    type="button"
+                    className="admin-btn-action action-success"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUpdateStatus(adm, 'VERIFIED');
+                    }}
                   >
-                    <CheckCircle size={15} />
+                    <CheckCircle size={14} /> Approve
                   </button>
                 )}
                 {adm.payment_status !== 'REJECTED' && (
                   <button
-                    title="Reject Application"
-                    onClick={() => onUpdateStatus(adm, 'REJECTED')}
+                    type="button"
+                    className="admin-btn-action action-danger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUpdateStatus(adm, 'REJECTED');
+                    }}
                   >
-                    <XCircle size={15} />
+                    <XCircle size={14} /> Reject
                   </button>
                 )}
                 <button
-                  title="Delete Admission Submission"
-                  onClick={() => onAskDelete(adm.admission_id || adm.id, adm.student_name)}
-                  style={{ color: '#ff6b6b', borderColor: 'rgba(255,107,107,0.3)' }}
+                  type="button"
+                  className="admin-btn-icon danger"
+                  title="Delete Application"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAskDelete(adm.admission_id || adm.id, adm.student_name);
+                  }}
                 >
-                  <Trash2 size={15} />
+                  <Trash2 size={14} />
                 </button>
               </span>
             </div>
@@ -2742,65 +3321,69 @@ const FeePlansSection = ({
       </div>
 
       {editing && (
-        <form
-          className="admin-record-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            await onSave(editing);
-          }}
-        >
-          <div className="admin-form-heading">
-            <h3>{editing.name ? `Edit: ${editing.name}` : 'New Tuition Fee Plan'}</h3>
-            <button type="button" onClick={() => setEditing(null)}>
-              <X size={16} />
-            </button>
-          </div>
-          <label>
-            Plan Name *
-            <input
-              required
-              value={editing.name}
-              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-            />
-          </label>
-          <label>
-            Monthly Amount (₹) *
-            <input
-              required
-              type="number"
-              value={editing.amount}
-              onChange={(e) => setEditing({ ...editing, amount: Number(e.target.value) })}
-            />
-          </label>
-          <label>
-            Billing Period
-            <input
-              value={editing.billing_period}
-              onChange={(e) => setEditing({ ...editing, billing_period: e.target.value })}
-            />
-          </label>
-          <label>
-            Status
-            <select
-              value={String(editing.active !== false)}
-              onChange={(e) => setEditing({ ...editing, active: e.target.value === 'true' })}
+        <div className="tfs-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}>
+          <div className="tfs-modal-card admin-record-form-card" style={{ maxWidth: '650px' }}>
+            <form
+              className="admin-record-form"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await onSave(editing);
+              }}
             >
-              <option value="true">Active</option>
-              <option value="false">Paused</option>
-            </select>
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            Description
-            <textarea
-              rows={3}
-              value={editing.description}
-              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-            />
-          </label>
-          <button className="admin-save" type="submit">
-            <Check size={16} /> Save Fee Plan
-          </button>
-        </form>
+              <div className="admin-form-heading">
+                <h3>{editing.name ? `Edit: ${editing.name}` : 'New Tuition Fee Plan'}</h3>
+                <button type="button" onClick={() => setEditing(null)}>
+                  <X size={16} />
+                </button>
+              </div>
+              <label>
+                Plan Name *
+                <input
+                  required
+                  value={editing.name}
+                  onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                />
+              </label>
+              <label>
+                Monthly Amount (₹) *
+                <input
+                  required
+                  type="number"
+                  value={editing.amount}
+                  onChange={(e) => setEditing({ ...editing, amount: Number(e.target.value) })}
+                />
+              </label>
+              <label>
+                Billing Period
+                <input
+                  value={editing.billing_period}
+                  onChange={(e) => setEditing({ ...editing, billing_period: e.target.value })}
+                />
+              </label>
+              <label>
+                Status
+                <select
+                  value={String(editing.active !== false)}
+                  onChange={(e) => setEditing({ ...editing, active: e.target.value === 'true' })}
+                >
+                  <option value="true">Active</option>
+                  <option value="false">Paused</option>
+                </select>
+              </label>
+              <label style={{ gridColumn: '1 / -1' }}>
+                Description
+                <textarea
+                  rows={3}
+                  value={editing.description}
+                  onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+                />
+              </label>
+              <button className="admin-save" type="submit" style={{ gridColumn: '1 / -1' }}>
+                <Check size={16} /> Save Fee Plan
+              </button>
+            </form>
+          </div>
+        </div>
       )}
 
       <div className="admin-table">
@@ -2873,68 +3456,72 @@ const CurriculumSection = ({
       </div>
 
       {editing && (
-        <form
-          className="admin-record-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            await onSave(editing);
-          }}
-        >
-          <div className="admin-form-heading">
-            <h3>{editing.title ? `Edit: ${editing.title}` : 'New Curriculum Module'}</h3>
-            <button type="button" onClick={() => setEditing(null)}>
-              <X size={16} />
-            </button>
+        <div className="tfs-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}>
+          <div className="tfs-modal-card admin-record-form-card" style={{ maxWidth: '650px' }}>
+            <form
+              className="admin-record-form"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await onSave(editing);
+              }}
+            >
+              <div className="admin-form-heading">
+                <h3>{editing.title ? `Edit: ${editing.title}` : 'New Curriculum Module'}</h3>
+                <button type="button" onClick={() => setEditing(null)}>
+                  <X size={16} />
+                </button>
+              </div>
+              <label>
+                Module Title *
+                <input
+                  required
+                  value={editing.title}
+                  onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+                />
+              </label>
+              <label>
+                Instrument Track *
+                <select
+                  value={editing.instrument}
+                  onChange={(e) => setEditing({ ...editing, instrument: e.target.value as any })}
+                >
+                  <option value="guitar">Acoustic Guitar</option>
+                  <option value="ukulele_standard">Ukulele (Standard)</option>
+                  <option value="ukulele_dotara">Ukulele (Dotara)</option>
+                </select>
+              </label>
+              <label>
+                Category
+                <input
+                  value={editing.category}
+                  onChange={(e) => setEditing({ ...editing, category: e.target.value })}
+                />
+              </label>
+              <label>
+                Status
+                <select
+                  value={String(editing.active !== false)}
+                  onChange={(e) => setEditing({ ...editing, active: e.target.value === 'true' })}
+                >
+                  <option value="true">Active</option>
+                  <option value="false">Paused</option>
+                </select>
+              </label>
+              <label style={{ gridColumn: '1 / -1' }}>
+                Description *
+                <textarea
+                  required
+                  rows={3}
+                  value={editing.description}
+                  onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+                />
+              </label>
+              <button className="admin-save" type="submit" style={{ gridColumn: '1 / -1' }}>
+                <Check size={16} /> Save Curriculum Module
+              </button>
+            </form>
           </div>
-          <label>
-            Module Title *
-            <input
-              required
-              value={editing.title}
-              onChange={(e) => setEditing({ ...editing, title: e.target.value })}
-            />
-          </label>
-          <label>
-            Instrument Track *
-            <select
-              value={editing.instrument}
-              onChange={(e) => setEditing({ ...editing, instrument: e.target.value as any })}
-            >
-              <option value="guitar">Acoustic Guitar</option>
-              <option value="ukulele_standard">Ukulele (Standard)</option>
-              <option value="ukulele_dotara">Ukulele (Dotara)</option>
-            </select>
-          </label>
-          <label>
-            Category
-            <input
-              value={editing.category}
-              onChange={(e) => setEditing({ ...editing, category: e.target.value })}
-            />
-          </label>
-          <label>
-            Status
-            <select
-              value={String(editing.active !== false)}
-              onChange={(e) => setEditing({ ...editing, active: e.target.value === 'true' })}
-            >
-              <option value="true">Active</option>
-              <option value="false">Paused</option>
-            </select>
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            Description *
-            <textarea
-              required
-              rows={3}
-              value={editing.description}
-              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-            />
-          </label>
-          <button className="admin-save" type="submit">
-            <Check size={16} /> Save Curriculum Module
-          </button>
-        </form>
+        </div>
       )}
 
       <div className="admin-table">
@@ -3006,48 +3593,52 @@ const AddonsSection = ({
       </div>
 
       {editing && (
-        <form
-          className="admin-record-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            await onSave(editing);
-          }}
-        >
-          <div className="admin-form-heading">
-            <h3>{editing.name ? `Edit: ${editing.name}` : 'New Add-on'}</h3>
-            <button type="button" onClick={() => setEditing(null)}>
-              <X size={16} />
-            </button>
+        <div className="tfs-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}>
+          <div className="tfs-modal-card admin-record-form-card" style={{ maxWidth: '650px' }}>
+            <form
+              className="admin-record-form"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await onSave(editing);
+              }}
+            >
+              <div className="admin-form-heading">
+                <h3>{editing.name ? `Edit: ${editing.name}` : 'New Add-on'}</h3>
+                <button type="button" onClick={() => setEditing(null)}>
+                  <X size={16} />
+                </button>
+              </div>
+              <label>
+                Name *
+                <input
+                  required
+                  value={editing.name}
+                  onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                />
+              </label>
+              <label>
+                Monthly Fee (₹) *
+                <input
+                  required
+                  type="number"
+                  value={editing.amount}
+                  onChange={(e) => setEditing({ ...editing, amount: Number(e.target.value) })}
+                />
+              </label>
+              <label style={{ gridColumn: '1 / -1' }}>
+                Description
+                <textarea
+                  rows={3}
+                  value={editing.description}
+                  onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+                />
+              </label>
+              <button className="admin-save" type="submit" style={{ gridColumn: '1 / -1' }}>
+                <Check size={16} /> Save Add-on
+              </button>
+            </form>
           </div>
-          <label>
-            Name *
-            <input
-              required
-              value={editing.name}
-              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-            />
-          </label>
-          <label>
-            Monthly Fee (₹) *
-            <input
-              required
-              type="number"
-              value={editing.amount}
-              onChange={(e) => setEditing({ ...editing, amount: Number(e.target.value) })}
-            />
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            Description
-            <textarea
-              rows={3}
-              value={editing.description}
-              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-            />
-          </label>
-          <button className="admin-save" type="submit">
-            <Check size={16} /> Save Add-on
-          </button>
-        </form>
+        </div>
       )}
 
       <div className="admin-table">
@@ -3120,54 +3711,58 @@ const ScheduleSection = ({
       </div>
 
       {editing && (
-        <form
-          className="admin-record-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            await onSave(editing);
-          }}
-        >
-          <div className="admin-form-heading">
-            <h3>{editing.day_label ? `Edit: ${editing.day_label}` : 'New Schedule Window'}</h3>
-            <button type="button" onClick={() => setEditing(null)}>
-              <X size={16} />
-            </button>
+        <div className="tfs-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}>
+          <div className="tfs-modal-card admin-record-form-card" style={{ maxWidth: '650px' }}>
+            <form
+              className="admin-record-form"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await onSave(editing);
+              }}
+            >
+              <div className="admin-form-heading">
+                <h3>{editing.day_label ? `Edit: ${editing.day_label}` : 'New Schedule Window'}</h3>
+                <button type="button" onClick={() => setEditing(null)}>
+                  <X size={16} />
+                </button>
+              </div>
+              <label>
+                Day *
+                <input
+                  required
+                  value={editing.day_label}
+                  onChange={(e) => setEditing({ ...editing, day_label: e.target.value })}
+                />
+              </label>
+              <label>
+                Time Window *
+                <input
+                  required
+                  value={editing.time_label}
+                  onChange={(e) => setEditing({ ...editing, time_label: e.target.value })}
+                />
+              </label>
+              <label>
+                Format
+                <input
+                  value={editing.format || ''}
+                  onChange={(e) => setEditing({ ...editing, format: e.target.value })}
+                />
+              </label>
+              <label style={{ gridColumn: '1 / -1' }}>
+                Description
+                <textarea
+                  rows={2}
+                  value={editing.description}
+                  onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+                />
+              </label>
+              <button className="admin-save" type="submit" style={{ gridColumn: '1 / -1' }}>
+                <Check size={16} /> Save Schedule
+              </button>
+            </form>
           </div>
-          <label>
-            Day *
-            <input
-              required
-              value={editing.day_label}
-              onChange={(e) => setEditing({ ...editing, day_label: e.target.value })}
-            />
-          </label>
-          <label>
-            Time Window *
-            <input
-              required
-              value={editing.time_label}
-              onChange={(e) => setEditing({ ...editing, time_label: e.target.value })}
-            />
-          </label>
-          <label>
-            Format
-            <input
-              value={editing.format || ''}
-              onChange={(e) => setEditing({ ...editing, format: e.target.value })}
-            />
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            Description
-            <textarea
-              rows={2}
-              value={editing.description}
-              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-            />
-          </label>
-          <button className="admin-save" type="submit">
-            <Check size={16} /> Save Schedule
-          </button>
-        </form>
+        </div>
       )}
 
       <div className="admin-table">
@@ -3238,58 +3833,62 @@ const DiscountsSection = ({
       </div>
 
       {editing && (
-        <form
-          className="admin-record-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            await onSave(editing);
-          }}
-        >
-          <div className="admin-form-heading">
-            <h3>{editing.coupon_code || 'New Coupon'}</h3>
-            <button type="button" onClick={() => setEditing(null)}>
-              <X size={16} />
-            </button>
-          </div>
-          <label>
-            Name *
-            <input
-              required
-              value={editing.name || ''}
-              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-            />
-          </label>
-          <label>
-            Code *
-            <input
-              required
-              value={editing.coupon_code || ''}
-              onChange={(e) => setEditing({ ...editing, coupon_code: e.target.value.toUpperCase() })}
-            />
-          </label>
-          <label>
-            Discount Type
-            <select
-              value={editing.discount_type || 'percentage'}
-              onChange={(e) => setEditing({ ...editing, discount_type: e.target.value })}
+        <div className="tfs-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}>
+          <div className="tfs-modal-card admin-record-form-card" style={{ maxWidth: '650px' }}>
+            <form
+              className="admin-record-form"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await onSave(editing);
+              }}
             >
-              <option value="percentage">Percentage (%)</option>
-              <option value="amount">Fixed Amount (₹)</option>
-            </select>
-          </label>
-          <label>
-            Value *
-            <input
-              required
-              type="number"
-              value={editing.discount_value ?? 10}
-              onChange={(e) => setEditing({ ...editing, discount_value: Number(e.target.value) })}
-            />
-          </label>
-          <button className="admin-save" type="submit">
-            <Check size={16} /> Save Coupon
-          </button>
-        </form>
+              <div className="admin-form-heading">
+                <h3>{editing.coupon_code || 'New Coupon'}</h3>
+                <button type="button" onClick={() => setEditing(null)}>
+                  <X size={16} />
+                </button>
+              </div>
+              <label>
+                Name *
+                <input
+                  required
+                  value={editing.name || ''}
+                  onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                />
+              </label>
+              <label>
+                Code *
+                <input
+                  required
+                  value={editing.coupon_code || ''}
+                  onChange={(e) => setEditing({ ...editing, coupon_code: e.target.value.toUpperCase() })}
+                />
+              </label>
+              <label>
+                Discount Type
+                <select
+                  value={editing.discount_type || 'percentage'}
+                  onChange={(e) => setEditing({ ...editing, discount_type: e.target.value })}
+                >
+                  <option value="percentage">Percentage (%)</option>
+                  <option value="amount">Fixed Amount (₹)</option>
+                </select>
+              </label>
+              <label>
+                Value *
+                <input
+                  required
+                  type="number"
+                  value={editing.discount_value ?? 10}
+                  onChange={(e) => setEditing({ ...editing, discount_value: Number(e.target.value) })}
+                />
+              </label>
+              <button className="admin-save" type="submit" style={{ gridColumn: '1 / -1' }}>
+                <Check size={16} /> Save Coupon
+              </button>
+            </form>
+          </div>
+        </div>
       )}
 
       <div className="admin-table">
@@ -3343,40 +3942,44 @@ const BookingsSection = ({
         </div>
       </div>
       {editing && (
-        <form
-          className="admin-record-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            await onSave(editing);
-          }}
-        >
-          <div className="admin-form-heading">
-            <h3>Update Booking: {editing.name}</h3>
-            <button type="button" onClick={() => setEditing(null)}>
-              <X size={16} />
-            </button>
+        <div className="tfs-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}>
+          <div className="tfs-modal-card admin-record-form-card" style={{ maxWidth: '650px' }}>
+            <form
+              className="admin-record-form"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await onSave(editing);
+              }}
+            >
+              <div className="admin-form-heading">
+                <h3>Update Booking: {editing.name}</h3>
+                <button type="button" onClick={() => setEditing(null)}>
+                  <X size={16} />
+                </button>
+              </div>
+              <label>
+                Customer Name
+                <input value={editing.name || ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+              </label>
+              <label>
+                Status
+                <select value={editing.status || 'new'} onChange={(e) => setEditing({ ...editing, status: e.target.value })}>
+                  <option value="new">New</option>
+                  <option value="confirmed">Confirmed</option>
+                  <option value="completed">Completed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </label>
+              <label style={{ gridColumn: '1 / -1' }}>
+                Admin Reply / Notes
+                <textarea rows={2} value={editing.admin_reply || ''} onChange={(e) => setEditing({ ...editing, admin_reply: e.target.value })} />
+              </label>
+              <button className="admin-save" type="submit" style={{ gridColumn: '1 / -1' }}>
+                <Check size={16} /> Save Booking
+              </button>
+            </form>
           </div>
-          <label>
-            Customer Name
-            <input value={editing.name || ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-          </label>
-          <label>
-            Status
-            <select value={editing.status || 'new'} onChange={(e) => setEditing({ ...editing, status: e.target.value })}>
-              <option value="new">New</option>
-              <option value="confirmed">Confirmed</option>
-              <option value="completed">Completed</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </label>
-          <label style={{ gridColumn: '1 / -1' }}>
-            Admin Reply / Notes
-            <textarea rows={2} value={editing.admin_reply || ''} onChange={(e) => setEditing({ ...editing, admin_reply: e.target.value })} />
-          </label>
-          <button className="admin-save" type="submit">
-            <Check size={16} /> Save Booking
-          </button>
-        </form>
+        </div>
       )}
       {bookings.length === 0 ? (
         <p className="admin-empty">No website bookings received yet.</p>
